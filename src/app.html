@@ -1,0 +1,1637 @@
+<meta charset="utf-8">
+<title>MNIST paso a paso</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="description" content="Animación interactiva de una red neuronal real (784-16-16-10) que reconoce dígitos de MNIST: imagen, neurona, propagación, softmax, entrenamiento y dibujo libre.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:ital,wght@0,400;0,600;0,700;1,400&family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: aula de una sola pantalla. Barra de capítulos arriba, escenario (canvas) a la izquierda,
+   columna de narración a la derecha; en teléfono se apilan. Mundo oscuro a propósito: las activaciones brillan. */
+:root {
+  --bg: #0a0f1e;
+  --stage: #0b1122;
+  --surface: #10182f;
+  --surface-2: #172142;
+  --line: #26335c;
+  --ink: #eaeef8;
+  --muted: #9aa5c6;
+  --faint: #5d6890;
+  --pos: #ffb547;   /* excitación: peso positivo, activación */
+  --neg: #4cc3ff;   /* inhibición: peso negativo */
+  --err: #ff5c8a;   /* error y gradiente */
+  --ok: #4fe3a2;    /* respuesta correcta */
+  --on-pos: #1d1405;
+  --font-display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --font-body: "Figtree", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+  color-scheme: dark;
+}
+*, *::before, *::after { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 16px;
+  line-height: 1.5;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 12px;
+}
+.app { height: 100%; display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 12px; max-width: 1720px; margin: 0 auto; }
+
+/* barra superior */
+.top { display: flex; align-items: center; gap: 12px 20px; flex-wrap: wrap; }
+.brand { display: flex; align-items: center; gap: 12px; margin-right: auto; min-width: 0; }
+.brand svg { width: 40px; height: 40px; flex: none; }
+.brand h1 { font-family: var(--font-display); font-weight: 800; font-size: 1.5rem; letter-spacing: -0.015em; margin: 0; line-height: 1.05; }
+.brand p { margin: 2px 0 0; color: var(--muted); font-size: 0.86rem; }
+.chapters { display: flex; gap: 6px; flex-wrap: wrap; }
+.chapters button {
+  font: inherit; font-size: 0.88rem; color: var(--muted); background: transparent;
+  border: 1px solid var(--line); border-radius: 999px; padding: 5px 12px 5px 5px;
+  display: inline-flex; align-items: center; gap: 8px; cursor: pointer;
+}
+.chapters button .n {
+  width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--surface-2); color: var(--ink); font-weight: 700; font-size: 0.8rem; font-variant-numeric: tabular-nums;
+}
+.chapters button:hover { color: var(--ink); border-color: var(--faint); }
+.chapters button[aria-current="step"] { color: var(--ink); border-color: var(--pos); background: var(--surface); }
+.chapters button[aria-current="step"] .n { background: var(--pos); color: var(--on-pos); }
+.chapters button.seen .n { box-shadow: inset 0 0 0 1.5px var(--faint); }
+.fs { position: absolute; top: 10px; right: 10px; z-index: 2; width: 34px; height: 34px; display: grid; place-items: center; color: var(--muted); background: var(--surface); border: 1px solid var(--line); border-radius: 8px; cursor: pointer; }
+.fs svg { width: 16px; height: 16px; }
+.fs:hover { color: var(--ink); border-color: var(--muted); }
+
+/* zona principal */
+.main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 390px); gap: 16px; min-height: 0; }
+.stage-col { display: flex; flex-direction: column; gap: 10px; min-height: 0; min-width: 0; }
+.stage-wrap { position: relative; flex: 1; min-height: 0; background: var(--stage); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+#stage { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: block; }
+.loading { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 1rem; }
+.samples { display: flex; align-items: center; gap: 6px 8px; flex-wrap: wrap; min-height: 44px; }
+.samples .lbl { color: var(--muted); font-size: 0.85rem; margin-right: 4px; }
+.thumb { width: 40px; height: 40px; padding: 0; border: 1px solid var(--line); border-radius: 7px; background: #000; cursor: pointer; overflow: hidden; flex: none; }
+.thumb canvas { width: 100%; height: 100%; display: block; image-rendering: pixelated; }
+.thumb:hover { border-color: var(--muted); }
+.thumb[aria-pressed="true"] { outline: 2px solid var(--pos); outline-offset: 1px; }
+
+/* narración */
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 22px 22px 14px; display: flex; flex-direction: column; gap: 14px; min-height: 0; overflow: auto; }
+.eyebrow { font-size: 0.76rem; letter-spacing: 0.09em; text-transform: uppercase; color: var(--pos); font-weight: 700; }
+.panel h2 { font-family: var(--font-display); font-size: 1.65rem; line-height: 1.12; margin: -6px 0 0; text-wrap: balance; font-weight: 700; letter-spacing: -0.01em; }
+.beat-text { font-size: 1.04rem; }
+.beat-text p { margin: 0 0 0.65em; }
+.beat-text p:last-child { margin-bottom: 0; }
+.beat-text b { color: #fff; }
+.beat-text .tip { color: var(--muted); font-size: 0.9rem; }
+.beat-text .ok { color: var(--ok); }
+.beat-text .bad { color: var(--err); }
+.formula { font-family: var(--font-mono); font-size: 0.95rem; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; overflow-wrap: anywhere; line-height: 1.7; color: var(--ink); }
+.formula var { font-style: italic; color: #fff; }
+.formula sub, .formula sup { font-size: 0.72em; }
+.extras { display: flex; flex-wrap: wrap; gap: 8px; }
+.extras:empty { display: none; }
+.extras .group { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; width: 100%; }
+.extras .group > span { color: var(--muted); font-size: 0.84rem; margin-right: 2px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 0.82rem; color: var(--muted); }
+.legend:empty { display: none; }
+.legend span { display: inline-flex; align-items: center; gap: 7px; }
+.legend span::before { content: ""; width: 10px; height: 10px; border-radius: 50%; background: var(--c); box-shadow: 0 0 8px var(--c); }
+.btn {
+  font: inherit; font-size: 0.92rem; font-weight: 700; color: var(--ink); background: var(--surface-2);
+  border: 1px solid var(--line); border-radius: 8px; padding: 8px 14px; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 8px; line-height: 1.2;
+}
+.btn:hover:not(:disabled) { border-color: var(--muted); }
+.btn.primary { background: var(--pos); color: var(--on-pos); border-color: var(--pos); }
+.btn.primary:hover:not(:disabled) { border-color: #fff; }
+.btn.small { font-size: 0.84rem; padding: 6px 10px; }
+.btn[aria-pressed="true"] { border-color: var(--pos); color: var(--pos); }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn svg { width: 16px; height: 16px; flex: none; }
+:focus-visible { outline: 2px solid var(--neg); outline-offset: 2px; }
+.controls { margin-top: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 8px; padding-top: 12px; border-top: 1px solid var(--line); }
+.controls #nextBtn { margin-left: auto; }
+.dots { display: flex; gap: 6px; width: 100%; justify-content: center; order: -1; }
+.dots i { width: 8px; height: 8px; border-radius: 50%; background: var(--line); }
+.dots i.done { background: var(--faint); }
+.dots i.on { background: var(--pos); box-shadow: 0 0 8px var(--pos); }
+.hint { margin: 0; font-size: 0.76rem; color: var(--faint); }
+
+@media (max-width: 960px) {
+  html, body { height: auto; }
+  .app { height: auto; }
+  .main { grid-template-columns: minmax(0, 1fr); }
+  .stage-wrap { flex: none; width: 100%; aspect-ratio: 1120 / 660; }
+  .panel { overflow: visible; }
+  .chapters button .lbl { display: none; }
+  .chapters button { padding: 4px; }
+  .hint { display: none; }
+}
+@media (max-width: 520px) {
+  .brand h1 { font-size: 1.25rem; }
+  .brand p { display: none; }
+  .panel h2 { font-size: 1.4rem; }
+}
+</style>
+
+<div class="app">
+  <header class="top">
+    <div class="brand">
+      <svg viewBox="0 0 40 40" aria-hidden="true">
+        <g stroke="#26335c" stroke-width="1.2">
+          <path d="M8 10L20 8M8 10L20 20M8 10L20 32M8 20L20 8M8 20L20 20M8 20L20 32M8 30L20 8M8 30L20 20M8 30L20 32M20 8L32 14M20 20L32 14M20 32L32 14M20 8L32 26M20 20L32 26M20 32L32 26"/>
+        </g>
+        <path d="M8 20L20 20L32 14" stroke="#ffb547" stroke-width="2" fill="none"/>
+        <circle cx="8" cy="10" r="3" fill="#1b2546"/><circle cx="8" cy="20" r="3" fill="#ffb547"/><circle cx="8" cy="30" r="3" fill="#1b2546"/>
+        <circle cx="20" cy="8" r="3.4" fill="#1b2546"/><circle cx="20" cy="20" r="3.4" fill="#ffb547"/><circle cx="20" cy="32" r="3.4" fill="#1b2546"/>
+        <circle cx="32" cy="14" r="3.8" fill="#ffe9c4"/><circle cx="32" cy="26" r="3.8" fill="#1b2546"/>
+      </svg>
+      <div>
+        <h1>MNIST paso a paso</h1>
+        <p>Cómo una red neuronal real reconoce dígitos escritos a mano</p>
+      </div>
+    </div>
+    <nav class="chapters" id="chapters" aria-label="Capítulos"></nav>
+  </header>
+
+  <main class="main">
+    <section class="stage-col" aria-label="Animación">
+      <div class="stage-wrap" id="stageWrap">
+        <canvas id="stage" role="img" aria-label="Animación de la red neuronal; la explicación de cada paso está en el panel de texto"></canvas>
+        <button class="fs" id="fsBtn" type="button" aria-label="Pantalla completa"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4"/></svg></button>
+        <div class="loading" id="loading">Cargando 7 000 imágenes de MNIST…</div>
+      </div>
+      <div class="samples" id="samples"></div>
+    </section>
+
+    <aside class="panel" id="panel">
+      <div class="eyebrow" id="eyebrow"></div>
+      <h2 id="beatTitle"></h2>
+      <div class="beat-text" id="beatText" aria-live="polite"></div>
+      <div class="formula" id="formula" hidden></div>
+      <div class="extras" id="extras"></div>
+      <div class="legend" id="legend"></div>
+      <div class="controls">
+        <button class="btn" id="prevBtn" type="button" aria-label="Paso anterior">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3L5 8l5 5"/></svg>
+        </button>
+        <button class="btn" id="playBtn" type="button"></button>
+        <div class="dots" id="dots"></div>
+        <button class="btn primary" id="nextBtn" type="button">
+          Siguiente
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3l5 5-5 5"/></svg>
+        </button>
+      </div>
+      <p class="hint">Teclado: ← → avanzar · espacio reproducir · 1 a 6 capítulos</p>
+    </aside>
+  </main>
+</div>
+
+<script>
+(() => {
+'use strict';
+
+/* ======================================================================
+   Datos reales: pesos de una red 784-16-16-10 entrenada con numpy sobre
+   las 60 000 imágenes de MNIST, más 1 000 imágenes de prueba y 6 000 de
+   entrenamiento (para entrenar en vivo en el navegador).
+   ====================================================================== */
+const MODEL = /*__MODEL__*/null;
+const TEST_SPRITE = '__TEST_SPRITE__';
+const TRAIN_SPRITE = '__TRAIN_SPRITE__';
+
+const VW = 1120, VH = 660;
+const ARCH = [784, 16, 16, 10];
+const SEED = 20261017;
+const ETA = 0.1, BATCH = 32, EPOCH = 6000, MAX_EPOCHS = 15;
+const SPEEDS = [{ l: 'Lento', v: 0.2 }, { l: 'Normal', v: 1 }, { l: 'Rápido', v: 4 }, { l: 'Turbo', v: 8 }];
+const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/* ---------- utilidades ---------- */
+const $ = s => document.querySelector(s);
+const clamp = (v, a = 0, b = 1) => (v < a ? a : v > b ? b : v);
+const lerp = (a, b, t) => a + (b - a) * t;
+const ease = t => { t = clamp(t); return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2; };
+const prog = (t, dur, delay = 0) => (REDUCED ? 1 : clamp((t - delay) / dur));
+const sgn = (v, d = 2) => (v < 0 ? '−' : '+') + Math.abs(v).toFixed(d);
+const num = (v, d = 2) => (v < 0 ? '−' : '') + Math.abs(v).toFixed(d);
+const pct = (p, d = 1) => (p * 100).toFixed(d) + ' %';
+const grp = n => String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+const SUBS = '₀₁₂₃₄₅₆₇₈₉';
+const sub = n => String(n).replace(/\d/g, d => SUBS[d]);
+const lerpBox = (a, b, t) => ({ x: lerp(a.x, b.x, t), y: lerp(a.y, b.y, t), s: lerp(a.s, b.s, t) });
+
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function gauss(rng) { let u = 0; while (u === 0) u = rng(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * rng()); }
+function b64f32(s) { const bin = atob(s); const u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return new Float32Array(u.buffer); }
+
+/* ======================================================================
+   La red neuronal (perceptrón multicapa) — el mismo cálculo que en numpy
+   ====================================================================== */
+class MLP {
+  constructor(sizes) {
+    this.sizes = sizes; this.L = sizes.length - 1;
+    this.W = []; this.b = [];
+    for (let l = 0; l < this.L; l++) { this.W.push(new Float32Array(sizes[l + 1] * sizes[l])); this.b.push(new Float32Array(sizes[l + 1])); }
+    this.version = 0; this.seen = 0; this.scales = null;
+  }
+  static fromModel(m) {
+    const n = new MLP(m.arch);
+    m.W.forEach((s, l) => n.W[l].set(b64f32(s)));
+    m.b.forEach((s, l) => n.b[l].set(b64f32(s)));
+    for (const W of n.W) for (let k = 0; k < W.length; k++) if (Math.abs(W[k]) < 1e-30) W[k] = 0;
+    n.scales = m.scales;
+    return n;
+  }
+  randomize(seed) {  // inicialización de He: pesos ~ N(0, 2/entradas)
+    const rng = mulberry32(seed);
+    for (let l = 0; l < this.L; l++) {
+      const sd = Math.sqrt(2 / this.sizes[l]), W = this.W[l];
+      for (let k = 0; k < W.length; k++) W[k] = gauss(rng) * sd;
+      this.b[l].fill(0);
+    }
+    this.version++; this.seen = 0;
+  }
+  clone() { const n = new MLP(this.sizes); this.W.forEach((w, l) => n.W[l].set(w)); this.b.forEach((b, l) => n.b[l].set(b)); n.seen = this.seen; return n; }
+  copyFrom(o) { o.W.forEach((w, l) => this.W[l].set(w)); o.b.forEach((b, l) => this.b[l].set(b)); this.seen = o.seen; this.version++; }
+  forward(x) {
+    const z = [], a = [x]; let cur = x;
+    for (let l = 0; l < this.L; l++) {
+      const nin = this.sizes[l], nout = this.sizes[l + 1], W = this.W[l], b = this.b[l];
+      const zl = new Float32Array(nout);
+      for (let j = 0; j < nout; j++) { let s = b[j]; const o = j * nin; for (let i = 0; i < nin; i++) s += W[o + i] * cur[i]; zl[j] = s; }
+      z.push(zl);
+      if (l < this.L - 1) { const al = new Float32Array(nout); for (let j = 0; j < nout; j++) al[j] = zl[j] > 0 ? zl[j] : 0; a.push(al); cur = al; }
+    }
+    const zo = z[this.L - 1]; let m = -Infinity; for (const v of zo) if (v > m) m = v;
+    const p = new Float32Array(zo.length); let s = 0;
+    for (let k = 0; k < zo.length; k++) { p[k] = Math.exp(zo[k] - m); s += p[k]; }
+    for (let k = 0; k < p.length; k++) p[k] /= s;
+    let pred = 0; for (let k = 1; k < p.length; k++) if (p[k] > p[pred]) pred = k;
+    return { x, z, a, p, pred };
+  }
+  // Retropropagación de un solo ejemplo. delta[l][j] = ∂L/∂z de la neurona j de la capa l+1.
+  backward(F, y) {
+    const L = this.L, delta = new Array(L);
+    const dOut = Float32Array.from(F.p); dOut[y] -= 1; delta[L - 1] = dOut;
+    for (let l = L - 1; l > 0; l--) {
+      const nin = this.sizes[l], nout = this.sizes[l + 1], W = this.W[l], d = delta[l];
+      const dp = new Float32Array(nin);
+      for (let i = 0; i < nin; i++) { if (F.z[l - 1][i] <= 0) continue; let s = 0; for (let j = 0; j < nout; j++) s += W[j * nin + i] * d[j]; dp[i] = s; }
+      delta[l - 1] = dp;
+    }
+    return delta;  // ∂L/∂W[l][j,i] = delta[l][j] · a[l][i]
+  }
+  applyGrad(F, delta, lr) {
+    for (let l = 0; l < this.L; l++) {
+      const nin = this.sizes[l], nout = this.sizes[l + 1], W = this.W[l], b = this.b[l], A = F.a[l], d = delta[l];
+      for (let j = 0; j < nout; j++) { const dj = d[j]; if (!dj) continue; b[j] -= lr * dj; const o = j * nin; for (let i = 0; i < nin; i++) if (A[i]) W[o + i] -= lr * dj * A[i]; }
+    }
+    this.version++;
+  }
+}
+
+/* Entrenamiento por mini-lotes con descenso del gradiente estocástico (sin trucos extra). */
+class Trainer {
+  constructor(net, X, Y, n, seed) {
+    this.net = net; this.X = X; this.Y = Y; this.n = n; this.rng = mulberry32(seed);
+    this.order = new Uint32Array(n); for (let i = 0; i < n; i++) this.order[i] = i;
+    const s = net.sizes;
+    this.z = s.slice(1).map(k => new Float32Array(k));
+    this.a = s.slice(1).map(k => new Float32Array(k));
+    this.d = s.slice(1).map(k => new Float32Array(k));
+    this.gW = net.W.map(w => new Float32Array(w.length));
+    this.gb = net.b.map(b => new Float32Array(b.length));
+    this.reset();
+  }
+  reset() { this.pos = 0; this.rng = mulberry32(7); this.shuffle(); }
+  shuffle() { const o = this.order; for (let i = o.length - 1; i > 0; i--) { const j = Math.floor(this.rng() * (i + 1)); const t = o[i]; o[i] = o[j]; o[j] = t; } }
+  batch(B, lr) {
+    const net = this.net, s = net.sizes, L = net.L;
+    for (const g of this.gW) g.fill(0);
+    for (const g of this.gb) g.fill(0);
+    let loss = 0;
+    for (let q = 0; q < B; q++) {
+      const idx = this.order[this.pos++];
+      if (this.pos >= this.n) { this.pos = 0; this.shuffle(); }
+      const x = this.X.subarray(idx * 784, idx * 784 + 784), y = this.Y[idx];
+      let cur = x;
+      for (let l = 0; l < L; l++) {  // hacia adelante
+        const nin = s[l], nout = s[l + 1], W = net.W[l], b = net.b[l], z = this.z[l], a = this.a[l], last = l === L - 1;
+        for (let j = 0; j < nout; j++) { let v = b[j]; const o = j * nin; for (let i = 0; i < nin; i++) v += W[o + i] * cur[i]; z[j] = v; a[j] = last ? v : (v > 0 ? v : 0); }
+        cur = a;
+      }
+      const zo = this.a[L - 1], dO = this.d[L - 1];  // softmax + entropía cruzada
+      let m = -Infinity; for (let k = 0; k < zo.length; k++) if (zo[k] > m) m = zo[k];
+      let sum = 0; for (let k = 0; k < zo.length; k++) { dO[k] = Math.exp(zo[k] - m); sum += dO[k]; }
+      for (let k = 0; k < zo.length; k++) dO[k] /= sum;
+      loss -= Math.log(dO[y] + 1e-9);
+      dO[y] -= 1;  // δ salida = p − y
+      for (let l = L - 1; l >= 0; l--) {  // hacia atrás
+        const nin = s[l], nout = s[l + 1], W = net.W[l], d = this.d[l], gW = this.gW[l], gb = this.gb[l];
+        const prev = l === 0 ? x : this.a[l - 1];
+        for (let j = 0; j < nout; j++) { const dj = d[j]; if (dj === 0) continue; gb[j] += dj; const o = j * nin; for (let i = 0; i < nin; i++) { const v = prev[i]; if (v !== 0) gW[o + i] += dj * v; } }
+        if (l > 0) {
+          const dp = this.d[l - 1], zp = this.z[l - 1];
+          for (let i = 0; i < nin; i++) { if (zp[i] <= 0) { dp[i] = 0; continue; } let v = 0; for (let j = 0; j < nout; j++) v += W[j * nin + i] * d[j]; dp[i] = v; }
+        }
+      }
+    }
+    const k = lr / B;  // w ← w − η · (promedio del gradiente)
+    for (let l = 0; l < L; l++) {
+      const W = net.W[l], gW = this.gW[l], b = net.b[l], gb = this.gb[l];
+      for (let i = 0; i < W.length; i++) W[i] -= k * gW[i];
+      for (let i = 0; i < b.length; i++) b[i] -= k * gb[i];
+    }
+    net.seen += B; net.version++;
+    return loss / B;
+  }
+}
+
+function evalAcc(net, n = 1000) { let c = 0; const X = DATA.test.X, Y = DATA.test.Y; for (let k = 0; k < n; k++) if (net.forward(X.subarray(k * 784, k * 784 + 784)).pred === Y[k]) c++; return c / n; }
+function avgLoss(net, n = 400) { let s = 0; const X = DATA.train.X, Y = DATA.train.Y; for (let k = 0; k < n; k++) s -= Math.log(net.forward(X.subarray(k * 784, k * 784 + 784)).p[Y[k]] + 1e-9); return s / n; }
+
+function loadSprite(uri, n) {
+  return new Promise((res, rej) => {
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement('canvas'); c.width = img.width; c.height = img.height;
+      const g = c.getContext('2d', { willReadFrequently: true }); g.drawImage(img, 0, 0);
+      const d = g.getImageData(0, 0, c.width, c.height).data;
+      const per = c.width / 28, X = new Float32Array(n * 784);
+      for (let k = 0; k < n; k++) {
+        const r = Math.floor(k / per), cc = k % per;
+        for (let y = 0; y < 28; y++) { const row = ((r * 28 + y) * c.width + cc * 28) * 4; for (let x = 0; x < 28; x++) X[k * 784 + y * 28 + x] = d[row + x * 4] / 255; }
+      }
+      res(X);
+    };
+    img.onerror = rej;
+    img.src = uri;
+  });
+}
+
+/* ======================================================================
+   Estado
+   ====================================================================== */
+let NET, DATA, D, LIVE, TRAINER, L5 = null, L5ID = 0, WMAX = [], PICKS = [], ERRS = [], PRED = [], CONF = [], DEAD = [new Set(), new Set()];
+const S = { ch: 0, beat: 0, t0: 0, playing: false, sample: 0, VER: 0, mouse: { x: -1, y: -1, in: false }, frameNo: 0, seen: new Set() };
+const TR = { running: false, speed: 1, hist: [], ema: null, lastEval: 0, done: false, acc: 0 };
+const S6 = { x: new Float32Array(784), F: null, empty: true, net: 'pre', ver: 0, fromSample: false, dirty: false, touched: false };
+
+function analyze(k) {
+  const x = DATA.test.X.subarray(k * 784, k * 784 + 784), y = DATA.test.Y[k], F = NET.forward(x);
+  let best = -1, win = { r: 10, c: 10 };
+  for (let r = 1; r <= 21; r++) for (let c = 1; c <= 21; c++) {
+    let s = 0; for (let i = 0; i < 6; i++) for (let j = 0; j < 6; j++) { const v = x[(r + i) * 28 + c + j]; s += v * (1 - v) * 2 + 0.2 * v; }
+    if (s > best) { best = s; win = { r, c }; }
+  }
+  let rowBest = 14, rs = -1;
+  for (let r = 4; r < 24; r++) { let s = 0, segs = 0; for (let c = 0; c < 28; c++) { s += x[r * 28 + c]; if (c && (x[r * 28 + c] > 0.3) !== (x[r * 28 + c - 1] > 0.3)) segs++; } s += segs * 0.5; if (s > rs) { rs = s; rowBest = r; } }
+  let c0 = 0; for (let c = 0; c < 28; c++) if (x[rowBest * 28 + c] > 0.05) { c0 = Math.max(0, c - 1); break; }
+  c0 = Math.min(c0, 20);
+  const a1 = F.a[1]; let j = 0; for (let q = 1; q < 16; q++) if (a1[q] > a1[j]) j = q;
+  const W0 = NET.W[0], contrib = new Float32Array(784);
+  let sp = 0, sn = 0, cMax = 1e-6, iStar = 0, iv = -1;
+  for (let i = 0; i < 784; i++) {
+    const w = W0[j * 784 + i], c = w * x[i]; contrib[i] = c;
+    if (c > 0) sp += c; else sn += c;
+    if (Math.abs(c) > cMax) cMax = Math.abs(c);
+    if (x[i] > 0.5 && c > iv) { iv = c; iStar = i; }
+  }
+  let nAct = 0; for (let q = 0; q < 16; q++) if (a1[q] > 0) nAct++;
+  return { k, x, y, F, win, rowBest, c0, j, contrib, sp, sn, cMax, b: NET.b[0][j], z: F.z[0][j], a: a1[j], iStar, nAct };
+}
+
+function setSample(k, restart = true) {
+  S.sample = k; D = analyze(k); S.VER++;
+  if (S.ch === 4 && S.beat < 4) makeL5();
+  if (restart && !(S.ch === 4 && S.beat === 4) && S.ch !== 5) S.t0 = performance.now();
+  if (DATA) renderPanel();
+  document.querySelectorAll('.thumb').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.k === k)));
+}
+
+/* Capítulo 5: una red nueva, al azar, y un solo paso de descenso del gradiente para mostrarlo */
+function makeL5() {
+  const net0 = new MLP(ARCH);
+  let F0;
+  for (let s = 0; s < 8; s++) { net0.randomize(SEED + s); F0 = net0.forward(D.x); if (F0.pred !== D.y) break; }
+  const delta = net0.backward(F0, D.y);
+  const net1 = net0.clone(); net1.applyGrad(F0, delta, ETA);
+  L5 = { id: ++L5ID, k: S.sample, net0, F0, delta, net1, F1: net1.forward(D.x), acc0: evalAcc(net0) };
+  LIVE.copyFrom(net1); LIVE.seen = 0;
+  TRAINER.reset();
+  TR.running = false; TR.done = false; TR.ema = null; TR.acc = 0;
+  TR.hist = [{ seen: 0, loss: avgLoss(LIVE), acc: evalAcc(LIVE) }];
+  TR.lastEval = 0;
+}
+const etaNow = () => ETA / (1 + 0.3 * Math.floor(LIVE.seen / EPOCH));
+
+function trainTick(dt) {
+  if (!TR.running) return;
+  TR.acc += SPEEDS[TR.speed].v * 60 * Math.min(dt, 100) / 1000;
+  const nb = Math.min(16, Math.floor(TR.acc)); TR.acc -= Math.floor(TR.acc);
+  for (let i = 0; i < nb; i++) {
+    const l = TRAINER.batch(BATCH, etaNow());
+    TR.ema = TR.ema == null ? l : TR.ema * 0.96 + l * 0.04;
+    const every = LIVE.seen < EPOCH ? 480 : 1920;
+    if (LIVE.seen - TR.lastEval >= every) { TR.lastEval = LIVE.seen; TR.hist.push({ seen: LIVE.seen, loss: TR.ema, acc: evalAcc(LIVE) }); }
+    if (LIVE.seen >= MAX_EPOCHS * EPOCH) { TR.running = false; TR.done = true; TR.hist.push({ seen: LIVE.seen, loss: TR.ema, acc: evalAcc(LIVE) }); renderExtras(); break; }
+  }
+}
+
+/* ======================================================================
+   Dibujo: utilidades
+   ====================================================================== */
+const RGB = { stage: [11, 17, 34], tile: [7, 10, 22], dim: [27, 36, 68], pos: [255, 181, 71], neg: [76, 195, 255], err: [255, 92, 138], ok: [79, 227, 162], ink: [234, 238, 248], muted: [154, 165, 198], faint: [93, 104, 144], line: [38, 51, 92], hot: [255, 240, 208] };
+const rgba = (c, a = 1) => `rgba(${c[0] | 0},${c[1] | 0},${c[2] | 0},${a})`;
+const mix = (a, b, t) => [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)];
+const FB = '"Figtree","Segoe UI",system-ui,sans-serif';
+const FM = '"JetBrains Mono",ui-monospace,Consolas,monospace';
+const FD = '"Bricolage Grotesque","Segoe UI",system-ui,sans-serif';
+const INK = rgba(RGB.ink), MUTED = rgba(RGB.muted), FAINT = rgba(RGB.faint), LINE = rgba(RGB.line), POS = rgba(RGB.pos), NEG = rgba(RGB.neg), ERR = rgba(RGB.err), OK = rgba(RGB.ok);
+
+function txt(g, s, x, y, o = {}) {
+  g.font = `${o.w || 400} ${o.s || 14}px ${o.f || FB}`;
+  g.fillStyle = o.c || INK;
+  g.textAlign = o.a || 'left';
+  g.textBaseline = o.b || 'alphabetic';
+  const ga = g.globalAlpha;
+  if (o.al != null) g.globalAlpha = ga * o.al;
+  g.fillText(s, x, y);
+  g.globalAlpha = ga;
+}
+function cap(g, s, x, y, o = {}) {  // etiqueta en versalitas
+  if ('letterSpacing' in g) g.letterSpacing = '1.2px';
+  txt(g, s.toUpperCase(), x, y, Object.assign({ s: 11, w: 700, c: MUTED }, o));
+  if ('letterSpacing' in g) g.letterSpacing = '0px';
+}
+function rrect(g, x, y, w, h, r) { g.beginPath(); if (g.roundRect) g.roundRect(x, y, w, h, r); else g.rect(x, y, w, h); }
+function seg(g, x1, y1, x2, y2, c, w = 1) { g.strokeStyle = c; g.lineWidth = w; g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2); g.stroke(); }
+function arrow(g, x1, y1, x2, y2, c, w = 1.5, hs = 8) {
+  seg(g, x1, y1, x2, y2, c, w);
+  const a = Math.atan2(y2 - y1, x2 - x1);
+  g.fillStyle = c; g.beginPath(); g.moveTo(x2, y2);
+  g.lineTo(x2 - hs * Math.cos(a - 0.42), y2 - hs * Math.sin(a - 0.42));
+  g.lineTo(x2 - hs * Math.cos(a + 0.42), y2 - hs * Math.sin(a + 0.42));
+  g.closePath(); g.fill();
+}
+function frame(g, x, y, w, h, c = LINE, lw = 1) { g.strokeStyle = c; g.lineWidth = lw; g.strokeRect(x - 0.5, y - 0.5, w + 1, h + 1); }
+function check(g, x, y, s, c) { g.strokeStyle = c; g.lineWidth = 2.5; g.lineCap = 'round'; g.lineJoin = 'round'; g.beginPath(); g.moveTo(x, y); g.lineTo(x + s * 0.35, y + s * 0.35); g.lineTo(x + s, y - s * 0.45); g.stroke(); g.lineCap = 'butt'; }
+function cross(g, x, y, s, c) { g.strokeStyle = c; g.lineWidth = 2.5; g.lineCap = 'round'; g.beginPath(); g.moveTo(x, y - s / 2); g.lineTo(x + s, y + s / 2); g.moveTo(x + s, y - s / 2); g.lineTo(x, y + s / 2); g.stroke(); g.lineCap = 'butt'; }
+
+/* Mapas de color: píxeles en escala de grises; pesos/aportes divergentes (azul − · naranja +) */
+const cmGray = v => { const k = clamp(v), g = 4 + k * 251; return [g, g, Math.min(255, g + 18 * (1 - k))]; };
+const cmDiv = m => v => mix(RGB.tile, v >= 0 ? RGB.pos : RGB.neg, Math.pow(clamp(Math.abs(v) / m), 0.7));
+
+const TILES = new Map();
+function tile(key, ver, vals, cmap, w = 28, h = 28) {
+  let t = TILES.get(key);
+  if (!t) { const c = document.createElement('canvas'); c.width = w; c.height = h; const g = c.getContext('2d'); t = { c, g, img: g.createImageData(w, h), ver: null }; TILES.set(key, t); }
+  if (t.ver !== ver) {
+    const d = t.img.data;
+    for (let i = 0; i < w * h; i++) { const col = cmap(vals[i]); d[i * 4] = col[0]; d[i * 4 + 1] = col[1]; d[i * 4 + 2] = col[2]; d[i * 4 + 3] = 255; }
+    t.g.putImageData(t.img, 0, 0); t.ver = ver;
+  }
+  return t.c;
+}
+function drawTile(g, c, x, y, w, h = w, al = 1, smooth = false) {
+  if (al <= 0) return;
+  g.imageSmoothingEnabled = smooth;
+  const ga = g.globalAlpha; g.globalAlpha = ga * al;
+  g.drawImage(c, x, y, w, h);
+  g.globalAlpha = ga;
+}
+function gridOver(g, x, y, s, al = 0.5) {
+  g.strokeStyle = rgba(RGB.stage, al); g.lineWidth = 1; g.beginPath();
+  const c = s / 28;
+  for (let i = 1; i < 28; i++) { g.moveTo(x + i * c, y); g.lineTo(x + i * c, y + s); g.moveTo(x, y + i * c); g.lineTo(x + s, y + i * c); }
+  g.stroke();
+}
+function weightTile(net, k, key, ver) {
+  const W = net.W[0].subarray(k * 784, k * 784 + 784);
+  let m = 1e-6; for (let i = 0; i < 784; i++) if (Math.abs(W[i]) > m) m = Math.abs(W[i]);
+  return tile(key, ver, W, cmDiv(m));
+}
+function divLegend(g, x, y, w, al = 1, labels = ['negativo: resta', '0', 'positivo: suma']) {
+  const gr = g.createLinearGradient(x, 0, x + w, 0);
+  gr.addColorStop(0, NEG); gr.addColorStop(0.5, rgba(RGB.tile)); gr.addColorStop(1, POS);
+  const ga = g.globalAlpha; g.globalAlpha = ga * al;
+  g.fillStyle = gr; rrect(g, x, y, w, 10, 5); g.fill();
+  g.globalAlpha = ga;
+  txt(g, labels[0], x, y + 28, { s: 13, c: NEG, al });
+  txt(g, labels[1], x + w / 2, y + 28, { s: 13, c: MUTED, a: 'center', al });
+  txt(g, labels[2], x + w, y + 28, { s: 13, c: POS, a: 'right', al });
+}
+
+function neuron(g, x, y, r, b, o = {}) {
+  b = clamp(b);
+  const col = o.col || RGB.pos;
+  if (b > 0.02) {
+    const gr = g.createRadialGradient(x, y, r * 0.5, x, y, r * 2.9);
+    gr.addColorStop(0, rgba(col, 0.55 * b)); gr.addColorStop(1, rgba(col, 0));
+    g.fillStyle = gr; g.beginPath(); g.arc(x, y, r * 2.9, 0, 7); g.fill();
+  }
+  const f = b > 0.72 ? mix(col, RGB.hot, (b - 0.72) / 0.28) : mix(RGB.dim, col, b / 0.72);
+  g.fillStyle = rgba(f); g.beginPath(); g.arc(x, y, r, 0, 7); g.fill();
+  g.lineWidth = o.ring ? 2.5 : 1.2;
+  g.strokeStyle = o.ring || rgba(mix(RGB.line, col, b * 0.7));
+  g.stroke();
+}
+
+function tip(g, mx, my, lines, img) {
+  g.save();
+  const pad = 11, lh = 20; let w = 0;
+  for (const [s, st] of lines) { g.font = st === 'h' ? `700 14px ${FB}` : `400 13px ${st === 'v' ? FM : FB}`; w = Math.max(w, g.measureText(s).width); }
+  const imgS = img ? 96 : 0;
+  const W = Math.max(w, imgS) + pad * 2, H = lines.length * lh + pad * 2 - 4 + (img ? imgS + 10 : 0);
+  let x = mx + 18, y = my + 14;
+  if (x + W > VW - 6) x = mx - 18 - W;
+  if (y + H > VH - 6) y = VH - 6 - H;
+  if (y < 6) y = 6;
+  g.shadowColor = 'rgba(0,0,0,.5)'; g.shadowBlur = 16;
+  g.fillStyle = 'rgba(17,25,50,.97)'; rrect(g, x, y, W, H, 8); g.fill();
+  g.shadowBlur = 0; g.strokeStyle = LINE; g.lineWidth = 1; g.stroke();
+  let yy = y + pad;
+  if (img) { drawTile(g, img, x + pad, yy, imgS); frame(g, x + pad, yy, imgS, imgS); yy += imgS + 10; }
+  for (const [s, st] of lines) {
+    txt(g, s, x + pad, yy + 13, { s: st === 'h' ? 14 : 13, w: st === 'h' ? 700 : 400, f: st === 'v' ? FM : FB, c: st === 'm' ? MUTED : INK });
+    yy += lh;
+  }
+  g.restore();
+}
+
+/* ======================================================================
+   Diagrama de la red (lo usan los capítulos 3 a 6)
+   ====================================================================== */
+const HOV = [];
+function netLayout(box, o = {}) {
+  const xs = o.xs || [0.2, 0.47, 0.68, 0.86];
+  const top = box.y + (o.labels === false ? 6 : 34), H = box.y + box.h - top - 6;
+  const colW = o.colW || 12;
+  const col = { x: box.x + box.w * xs[0] - colW / 2, y: top, w: colW, h: H, ch: H / 784 };
+  const layers = [null];
+  [16, 16, 10].forEach((n, li) => {
+    const sp = Math.min(H / n, li === 2 ? 52 : 34);
+    const r = li === 2 ? Math.min(sp * 0.32, 15) : Math.min(sp * 0.36, 12);
+    const y0 = top + H / 2 - (sp * (n - 1)) / 2, lx = box.x + box.w * xs[li + 1];
+    layers.push(Array.from({ length: n }, (_, j) => ({ x: lx, y: y0 + j * sp, r })));
+  });
+  let img = null;
+  if (o.img !== false) { const s = o.imgS || 104; img = { x: box.x + (o.imgX || 0), y: top + H / 2 - s / 2, s }; }
+  return { box, col, layers, img, top, H };
+}
+function layerLabels(g, Lo, active = -1, al = 1, compact = false) {
+  const names = compact ? ['Entrada', 'Oculta 1', 'Oculta 2', 'Salida'] : ['Entrada · 784', 'Oculta 1 · 16', 'Oculta 2 · 16', 'Salida · 10'];
+  const xs = [Lo.col.x + Lo.col.w / 2, Lo.layers[1][0].x, Lo.layers[2][0].x, Lo.layers[3][0].x];
+  xs.forEach((x, i) => cap(g, names[i], x, Lo.top - 14, { a: 'center', c: i === active ? POS : MUTED, al }));
+}
+function dynScales(F) {
+  const s = [1, 1e-3, 1e-3, 1];
+  for (let l = 1; l <= 2; l++) for (const v of F.a[l]) if (v > s[l]) s[l] = v;
+  return s;
+}
+
+function drawNet(g, Lo, net, F, o = {}) {
+  const fwd = o.fwd ?? 3, x = F.x, col = Lo.col;
+  const scales = net.scales || dynScales(F);
+  if (Lo.img) {
+    const I = Lo.img;
+    drawTile(g, tile('nx' + (o.key || ''), o.ver ?? S.VER, x, cmGray), I.x, I.y, I.s);
+    frame(g, I.x, I.y, I.s, I.s);
+    arrow(g, I.x + I.s + 6, I.y + I.s / 2, col.x - 6, I.y + I.s / 2, rgba(RGB.muted, 0.7));
+    if (col.x - I.x - I.s > 60) txt(g, 'aplanar', (I.x + I.s + col.x) / 2, I.y + I.s / 2 - 9, { s: 11, c: FAINT, a: 'center' });
+  }
+  g.fillStyle = rgba(RGB.tile); g.fillRect(col.x, col.y, col.w, col.h);
+  drawTile(g, tile('col' + (o.key || ''), o.ver ?? S.VER, x, cmGray, 1, 784), col.x, col.y, col.w, col.h, 1, true);
+  frame(g, col.x, col.y, col.w, col.h);
+  HOV.push({ type: 'col', col, F });
+
+  g.save();
+  g.globalCompositeOperation = 'lighter';
+  const s0 = clamp(fwd);
+  if (s0 < 1 && o.ghost !== false) ghostIn(g, Lo, net);
+  if (s0 > 0) segIn(g, Lo, net, F, s0, o.dimIn ?? 1);
+  for (const l of [1, 2]) {
+    const s = clamp(fwd - l);
+    if (s < 1 && o.ghost !== false) ghostDense(g, Lo, net, l);
+    if (s > 0) segDense(g, Lo, net, F, l, s);
+  }
+  if (o.back != null) backPass(g, Lo, net, F, o.delta, o.back);
+  g.restore();
+
+  let zmin = Infinity, zmax = -Infinity;
+  for (const v of F.z[2]) { if (v < zmin) zmin = v; if (v > zmax) zmax = v; }
+  for (let l = 1; l <= 3; l++) {
+    const rev = clamp((fwd - (l - 1) - 0.72) / 0.28), lay = Lo.layers[l];
+    for (let j = 0; j < lay.length; j++) {
+      const n = lay[j];
+      let b;
+      if (l < 3) b = F.a[l][j] / scales[l];
+      else b = o.outMode === 'z' ? Math.pow((F.z[2][j] - zmin) / (zmax - zmin + 1e-9), 2) : F.p[j];
+      const ring = l === 3 && rev >= 1 && j === F.pred ? '#ffffff' : null;
+      neuron(g, n.x, n.y, n.r, b * rev, { ring });
+      HOV.push({ x: n.x, y: n.y, r: n.r, l, j, net, F });
+    }
+  }
+  if (o.back != null) {  // anillos rosados: cuánto error recibe cada neurona (|δ|)
+    for (let l = 3; l >= 1; l--) {
+      const reach = clamp((o.back - (3 - l)) * 3), d = o.delta[l - 1];
+      if (reach <= 0) continue;
+      let m = 1e-9; for (const v of d) m = Math.max(m, Math.abs(v));
+      Lo.layers[l].forEach((n, j) => {
+        const k = Math.abs(d[j]) / m; if (k < 0.03) return;
+        g.strokeStyle = rgba(RGB.err, k * reach); g.lineWidth = 3; g.beginPath(); g.arc(n.x, n.y, n.r + 4.5, 0, 7); g.stroke();
+      });
+    }
+  }
+  // etiquetas de salida
+  const outRev = clamp((fwd - 2 - 0.72) / 0.28);
+  if (o.outLabels !== false) Lo.layers[3].forEach((n, k) => {
+    const lx = n.x + n.r + 9, isT = o.truth === k;
+    txt(g, String(k), lx, n.y + 6, { s: 17, w: 700, f: FD, c: isT ? OK : INK });
+    if (o.outMode === 'z' && outRev > 0) txt(g, `z = ${num(F.z[2][k], 1)}`, lx + 20, n.y + 5, { s: 12, f: FM, c: MUTED, al: outRev });
+    if (o.bars && outRev > 0) {
+      const bw = o.barW || 70, bx = lx + 22, p = F.p[k];
+      g.fillStyle = rgba(RGB.line, 0.6); g.fillRect(bx, n.y - 4, bw, 8);
+      g.fillStyle = rgba(k === F.pred ? RGB.hot : RGB.pos, outRev * (k === F.pred ? 1 : 0.75)); g.fillRect(bx, n.y - 4, Math.max(1, bw * p), 8);
+      if (o.pctText !== false) txt(g, pct(p, p > 0.995 ? 1 : 1), bx + bw + 6, n.y + 4, { s: 11, f: FM, c: k === F.pred ? INK : MUTED, al: outRev });
+    }
+  });
+}
+
+function ghostIn(g, Lo, net) {
+  const W = net.W[0], h1 = Lo.layers[1], col = Lo.col, xa = col.x + col.w + 1;
+  const P = [new Path2D(), new Path2D()];
+  for (let i = 0; i < 784; i += 3) {
+    const ya = col.y + (i + 0.5) * col.ch;
+    for (let j = 0; j < 16; j++) { const n = h1[j], p = P[W[j * 784 + i] > 0 ? 0 : 1]; p.moveTo(xa, ya); p.lineTo(n.x - n.r, n.y); }
+  }
+  g.lineWidth = 0.5;
+  g.strokeStyle = rgba(RGB.pos, 0.022); g.stroke(P[0]);
+  g.strokeStyle = rgba(RGB.neg, 0.022); g.stroke(P[1]);
+}
+function ghostDense(g, Lo, net, l) {
+  const W = net.W[l], src = Lo.layers[l], dst = Lo.layers[l + 1], nin = src.length;
+  let m = 1e-6; for (const v of W) m = Math.max(m, Math.abs(v));
+  for (let j = 0; j < dst.length; j++) for (let i = 0; i < nin; i++) {
+    const w = W[j * nin + i], st = Math.abs(w) / m;
+    seg(g, src[i].x + src[i].r, src[i].y, dst[j].x - dst[j].r, dst[j].y, rgba(w > 0 ? RGB.pos : RGB.neg, 0.03 + 0.1 * st), 0.7);
+  }
+}
+function segIn(g, Lo, net, F, s, dim) {
+  const x = F.x, W = net.W[0], h1 = Lo.layers[1], col = Lo.col;
+  let m = 1e-6;
+  for (let i = 0; i < 784; i++) { const v = x[i]; if (v < 0.02) continue; for (let j = 0; j < 16; j++) { const c = Math.abs(W[j * 784 + i] * v); if (c > m) m = c; } }
+  m *= 0.65;
+  const P = [[], []]; for (let k = 0; k < 2; k++) for (let l = 0; l < 6; l++) P[k][l] = new Path2D();
+  const xa = col.x + col.w + 1, heads = [];
+  for (let i = 0; i < 784; i++) {
+    const v = x[i]; if (v < 0.02) continue;
+    const ya = col.y + (i + 0.5) * col.ch;
+    for (let j = 0; j < 16; j++) {
+      const c = W[j * 784 + i] * v, st = Math.min(1, Math.abs(c) / m);
+      if (st < 0.1) continue;
+      const lv = Math.min(5, (st * 6) | 0), n = h1[j];
+      const xb = lerp(xa, n.x - n.r, s), yb = lerp(ya, n.y, s);
+      const p = P[c > 0 ? 0 : 1][lv]; p.moveTo(xa, ya); p.lineTo(xb, yb);
+      if (s < 1 && st > 0.6) heads.push(xb, yb, c > 0 ? 0 : 1);
+    }
+  }
+  for (let k = 0; k < 2; k++) for (let l = 0; l < 6; l++) {
+    g.strokeStyle = rgba(k ? RGB.neg : RGB.pos, (0.03 + l * 0.045) * dim); g.lineWidth = 0.6 + l * 0.16; g.stroke(P[k][l]);
+  }
+  for (let q = 0; q < heads.length; q += 3) { g.fillStyle = rgba(heads[q + 2] ? RGB.neg : RGB.hot, 0.5); g.beginPath(); g.arc(heads[q], heads[q + 1], 1.8, 0, 7); g.fill(); }
+}
+function segDense(g, Lo, net, F, l, s) {
+  const A = F.a[l], W = net.W[l], src = Lo.layers[l], dst = Lo.layers[l + 1], nin = src.length;
+  let m = 1e-6;
+  for (let j = 0; j < dst.length; j++) for (let i = 0; i < nin; i++) m = Math.max(m, Math.abs(W[j * nin + i] * A[i]));
+  for (let j = 0; j < dst.length; j++) for (let i = 0; i < nin; i++) {
+    const c = W[j * nin + i] * A[i], st = Math.abs(c) / m;
+    if (st < 0.04) continue;
+    const a = src[i], b = dst[j], xa = a.x + a.r, xb = lerp(xa, b.x - b.r, s), yb = lerp(a.y, b.y, s);
+    seg(g, xa, a.y, xb, yb, rgba(c > 0 ? RGB.pos : RGB.neg, 0.1 + 0.75 * st), 0.6 + 2.8 * st);
+    if (s < 1 && st > 0.35) { g.fillStyle = rgba(c > 0 ? RGB.hot : RGB.neg, 0.9); g.beginPath(); g.arc(xb, yb, 2 + 2 * st, 0, 7); g.fill(); }
+  }
+}
+function backPass(g, Lo, net, F, delta, bp) {
+  for (const [l, s] of [[2, clamp(bp)], [1, clamp(bp - 1)], [0, clamp(bp - 2)]]) {
+    if (s <= 0) continue;
+    const d = delta[l], A = F.a[l], dst = Lo.layers[l + 1];
+    let m = 1e-9;
+    if (l > 0) {
+      const src = Lo.layers[l], nin = src.length;
+      for (let j = 0; j < dst.length; j++) for (let i = 0; i < nin; i++) m = Math.max(m, Math.abs(d[j] * A[i]));
+      for (let j = 0; j < dst.length; j++) for (let i = 0; i < nin; i++) {
+        const st = Math.abs(d[j] * A[i]) / m; if (st < 0.05) continue;
+        const b = dst[j], a = src[i], xs = b.x - b.r, xe = lerp(xs, a.x + a.r, s), ye = lerp(b.y, a.y, s);
+        seg(g, xs, b.y, xe, ye, rgba(RGB.err, 0.12 + 0.75 * st), 0.6 + 2.6 * st);
+        if (s < 1 && st > 0.3) { g.fillStyle = rgba(RGB.err, 0.95); g.beginPath(); g.arc(xe, ye, 2 + 2 * st, 0, 7); g.fill(); }
+      }
+    } else {
+      const col = Lo.col, xa = col.x + col.w + 1;
+      for (let j = 0; j < 16; j++) for (let i = 0; i < 784; i++) if (A[i] > 0.02) m = Math.max(m, Math.abs(d[j] * A[i]));
+      const P = [new Path2D(), new Path2D(), new Path2D(), new Path2D()];
+      for (let j = 0; j < 16; j++) {
+        if (!d[j]) continue;
+        const b = dst[j];
+        for (let i = 0; i < 784; i++) {
+          if (A[i] < 0.02) continue;
+          const st = Math.abs(d[j] * A[i]) / m; if (st < 0.08) continue;
+          const ya = col.y + (i + 0.5) * col.ch, xs = b.x - b.r;
+          const p = P[Math.min(3, (st * 4) | 0)]; p.moveTo(xs, b.y); p.lineTo(lerp(xs, xa, s), lerp(b.y, ya, s));
+        }
+      }
+      P.forEach((p, k) => { g.strokeStyle = rgba(RGB.err, 0.05 + k * 0.08); g.lineWidth = 0.6 + k * 0.25; g.stroke(p); });
+    }
+  }
+}
+
+function drawHover(g) {
+  if (!S.mouse.in) return;
+  const mx = S.mouse.x, my = S.mouse.y;
+  let best = null, bd = 1e9;
+  for (const h of HOV) {
+    if (h.type === 'col') {
+      const c = h.col;
+      if (mx >= c.x - 7 && mx <= c.x + c.w + 7 && my >= c.y && my < c.y + c.h) { best = h; break; }
+      continue;
+    }
+    const d = Math.hypot(mx - h.x, my - h.y);
+    if (d < h.r + 5 && d < bd) { bd = d; best = h; }
+  }
+  if (!best) return;
+  if (best.type === 'col') {
+    const c = best.col, i = clamp(Math.floor((my - c.y) / c.ch), 0, 783), yy = c.y + (i + 0.5) * c.ch;
+    seg(g, c.x - 8, yy, c.x + c.w + 8, yy, '#fff', 1.5);
+    tip(g, mx, my, [[`Entrada x${sub(i + 1)}`, 'h'], [`fila ${Math.floor(i / 28) + 1}, columna ${(i % 28) + 1}`, 'm'], [`valor = ${best.F.x[i].toFixed(2)}`, 'v']]);
+    return;
+  }
+  const { l, j, net, F } = best;
+  g.strokeStyle = '#fff'; g.lineWidth = 2; g.beginPath(); g.arc(best.x, best.y, best.r + 3, 0, 7); g.stroke();
+  if (l === 1) {
+    const img = net === NET ? weightTile(NET, j, 'w' + j, 0) : weightTile(net, j, 'tip', S.frameNo);
+    const dead = net === NET && DEAD[0].has(j);
+    tip(g, mx, my, [[`Capa oculta 1 · neurona ${j + 1}`, 'h'], [dead ? 'neurona muerta: nunca se activa' : 'sus 784 pesos como imagen', 'm'], [`z = ${num(F.z[0][j])}`, 'v'], [`a = ReLU(z) = ${num(F.a[1][j])}`, 'v']], img);
+  } else if (l === 2) {
+    tip(g, mx, my, [[`Capa oculta 2 · neurona ${j + 1}`, 'h'], ['recibe las 16 activaciones de la capa 1', 'm'], [`z = ${num(F.z[1][j])}`, 'v'], [`a = ReLU(z) = ${num(F.a[2][j])}`, 'v']]);
+  } else {
+    tip(g, mx, my, [[`Salida · dígito ${j}`, 'h'], [`puntaje z = ${num(F.z[2][j])}`, 'v'], [`probabilidad p = ${pct(F.p[j], 2)}`, 'v']]);
+  }
+}
+
+/* ======================================================================
+   Capítulo 1 — La imagen son números
+   ====================================================================== */
+function drawCh1(g, beat, t) {
+  const x = D.x, G = { x: 92, y: 100, c: 17 }, GS = G.c * 28;
+  const COL = { x: 700, y: 50, w: 28, h: 560 }; COL.ch = COL.h / 784;
+  const flat = beat >= 2 ? ease(prog(t, 2600, 250)) : 0;
+  const rv = beat === 0 ? prog(t, 1200) : 1;
+
+  if (flat > 0) drawTile(g, tile('x', S.VER, x, cmGray), G.x, G.y, GS, GS, 0.14 * flat);
+  if (flat < 1) {
+    for (let r = 0; r < 28; r++) {
+      const rp = ease(clamp((flat - (r / 27) * 0.5) / 0.5));
+      for (let c = 0; c < 28; c++) {
+        const i = r * 28 + c, ap = clamp(rv * 2.2 - ((r + c) / 54) * 1.2);
+        if (ap <= 0) continue;
+        const sx = G.x + c * G.c, sy = G.y + r * G.c, ey = COL.y + i * COL.ch;
+        g.globalAlpha = ap;
+        g.fillStyle = rgba(cmGray(x[i]));
+        g.fillRect(lerp(sx, COL.x, rp), lerp(sy, ey, rp), lerp(G.c - 1, COL.w, rp), lerp(G.c - 1, COL.ch + 0.4, rp));
+      }
+    }
+    g.globalAlpha = 1;
+  } else {
+    drawTile(g, tile('col1', S.VER, x, cmGray, 1, 784), COL.x, COL.y, COL.w, COL.h, 1, true);
+  }
+
+  // medidas de la cuadrícula
+  const am = beat < 2 ? (beat === 0 ? prog(t, 500, 900) : 1) : 1 - prog(t, 300);
+  if (am > 0) {
+    g.globalAlpha = am;
+    seg(g, G.x, G.y - 18, G.x + GS, G.y - 18, MUTED); seg(g, G.x, G.y - 24, G.x, G.y - 12, MUTED); seg(g, G.x + GS, G.y - 24, G.x + GS, G.y - 12, MUTED);
+    txt(g, '28 píxeles', G.x + GS / 2, G.y - 28, { s: 14, c: MUTED, a: 'center' });
+    seg(g, G.x - 18, G.y, G.x - 18, G.y + GS, MUTED); seg(g, G.x - 24, G.y, G.x - 12, G.y); seg(g, G.x - 24, G.y + GS, G.x - 12, G.y + GS);
+    g.save(); g.translate(G.x - 28, G.y + GS / 2); g.rotate(-Math.PI / 2); txt(g, '28 píxeles', 0, 0, { s: 14, c: MUTED, a: 'center' }); g.restore();
+    txt(g, '28 × 28 = 784 píxeles', G.x + GS / 2, G.y + GS + 40, { s: 22, f: FD, w: 700, a: 'center' });
+    g.globalAlpha = 1;
+  }
+
+  // lupa
+  const mg = beat === 1 ? prog(t, 700) : beat === 2 ? 1 - prog(t, 300) : 0;
+  if (mg > 0) {
+    const n = 6, Z = { x: 650, y: 150, c: 60 }, wr = D.win.r, wc = D.win.c;
+    g.globalAlpha = mg;
+    g.strokeStyle = POS; g.lineWidth = 2; g.strokeRect(G.x + wc * G.c - 2, G.y + wr * G.c - 2, n * G.c + 3, n * G.c + 3);
+    seg(g, G.x + (wc + n) * G.c, G.y + wr * G.c - 2, Z.x, Z.y, rgba(RGB.pos, 0.5));
+    seg(g, G.x + (wc + n) * G.c, G.y + (wr + n) * G.c, Z.x, Z.y + n * Z.c, rgba(RGB.pos, 0.5));
+    for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
+      const v = x[(wr + i) * 28 + wc + j];
+      g.fillStyle = rgba(cmGray(v)); g.fillRect(Z.x + j * Z.c, Z.y + i * Z.c, Z.c - 2, Z.c - 2);
+      txt(g, v.toFixed(2), Z.x + j * Z.c + Z.c / 2 - 1, Z.y + i * Z.c + Z.c / 2 + 1, { s: 15, f: FM, a: 'center', b: 'middle', c: v > 0.55 ? '#0a0f1e' : INK });
+    }
+    frame(g, Z.x, Z.y, n * Z.c - 2, n * Z.c - 2, POS, 1.5);
+    cap(g, 'Lupa · valores reales de los píxeles', Z.x, Z.y - 16, { c: POS });
+    const gr = g.createLinearGradient(Z.x, 0, Z.x + n * Z.c, 0); gr.addColorStop(0, '#04040e'); gr.addColorStop(1, '#ffffff');
+    g.fillStyle = gr; rrect(g, Z.x, Z.y + n * Z.c + 24, n * Z.c - 2, 10, 5); g.fill();
+    txt(g, '0 = negro', Z.x, Z.y + n * Z.c + 54, { s: 13, c: MUTED });
+    txt(g, '1 = blanco', Z.x + n * Z.c - 2, Z.y + n * Z.c + 54, { s: 13, c: MUTED, a: 'right' });
+    g.globalAlpha = 1;
+  }
+
+  // vector aplanado
+  if (beat === 2) {
+    const fa = prog(t, 700, 2850);
+    if (fa > 0) {
+      g.globalAlpha = fa;
+      frame(g, COL.x, COL.y, COL.w, COL.h);
+      txt(g, 'x' + sub(1), COL.x - 10, COL.y + 10, { s: 15, f: FM, a: 'right', c: MUTED });
+      txt(g, 'x' + sub(784), COL.x - 10, COL.y + COL.h, { s: 15, f: FM, a: 'right', c: MUTED });
+      cap(g, 'Vector de entrada', COL.x + COL.w / 2, COL.y - 14, { a: 'center', c: POS });
+      txt(g, 'imagen original', G.x + GS / 2, G.y + GS + 40, { s: 14, c: FAINT, a: 'center' });
+      // recuadro con valores de una fila
+      const i0 = D.rowBest * 28 + D.c0, n = 8;
+      const sy = COL.y + i0 * COL.ch, ey = COL.y + (i0 + n) * COL.ch;
+      const bx = 812, rowH = 34, bh = n * rowH + 40, by = clamp(sy - bh / 2, 20, VH - bh - 20);
+      g.strokeStyle = POS; g.lineWidth = 1.5; g.strokeRect(COL.x - 3, sy - 1.5, COL.w + 6, Math.max(4, ey - sy) + 3);
+      seg(g, COL.x + COL.w + 3, sy, bx, by, rgba(RGB.pos, 0.6));
+      seg(g, COL.x + COL.w + 3, ey, bx, by + bh, rgba(RGB.pos, 0.6));
+      g.fillStyle = 'rgba(16,24,47,.95)'; rrect(g, bx, by, 250, bh, 8); g.fill(); g.strokeStyle = LINE; g.stroke();
+      txt(g, `fila ${D.rowBest + 1} de la imagen`, bx + 16, by + 26, { s: 13, c: MUTED });
+      for (let q = 0; q < n; q++) {
+        const i = i0 + q, v = x[i], yy = by + 40 + q * rowH;
+        g.fillStyle = rgba(cmGray(v)); g.fillRect(bx + 16, yy + 6, 20, 20); frame(g, bx + 16, yy + 6, 20, 20);
+        txt(g, `x${sub(i + 1)} =`, bx + 48, yy + 22, { s: 15, f: FM, c: MUTED });
+        txt(g, v.toFixed(2), bx + 232, yy + 22, { s: 15, f: FM, a: 'right' });
+      }
+      g.globalAlpha = 1;
+    }
+  }
+
+  // cursor sobre la cuadrícula
+  const m = S.mouse;
+  if (beat < 2 && m.in && m.x >= G.x && m.x < G.x + GS && m.y >= G.y && m.y < G.y + GS) {
+    const c = Math.floor((m.x - G.x) / G.c), r = Math.floor((m.y - G.y) / G.c), i = r * 28 + c;
+    g.strokeStyle = '#fff'; g.lineWidth = 1.5; g.strokeRect(G.x + c * G.c - 1, G.y + r * G.c - 1, G.c + 1, G.c + 1);
+    tip(g, m.x, m.y, [[`Píxel fila ${r + 1}, columna ${c + 1}`, 'h'], [`valor = ${x[i].toFixed(2)}`, 'v'], [`en el vector: x${sub(i + 1)}`, 'm']]);
+  }
+}
+
+/* ======================================================================
+   Capítulo 2 — Una neurona
+   ====================================================================== */
+function fanLines(g, G0, N, j, lr) {
+  const W0 = NET.W[0], wm = WMAX[j], c = G0.s / 28;
+  const P = [[], []]; for (let k = 0; k < 2; k++) for (let l = 0; l < 5; l++) P[k][l] = new Path2D();
+  const cnt = Math.floor(lr * 784);
+  for (let i = 0; i < cnt; i++) {
+    const w = W0[j * 784 + i], st = Math.abs(w) / wm;
+    if (st < 0.05) continue;
+    const lv = Math.min(4, (st * 5) | 0), px = G0.x + ((i % 28) + 0.5) * c, py = G0.y + (Math.floor(i / 28) + 0.5) * c;
+    const p = P[w > 0 ? 0 : 1][lv]; p.moveTo(px, py); p.lineTo(N.x, N.y);
+  }
+  g.save(); g.globalCompositeOperation = 'lighter';
+  for (let k = 0; k < 2; k++) for (let l = 0; l < 5; l++) { g.strokeStyle = rgba(k ? RGB.neg : RGB.pos, 0.03 + l * 0.04); g.lineWidth = 0.6 + l * 0.15; g.stroke(P[k][l]); }
+  g.restore();
+}
+function cellHover(g, slots) {
+  const m = S.mouse; if (!m.in) return false;
+  const W0j = NET.W[0].subarray(D.j * 784, D.j * 784 + 784);
+  for (const s of slots) {
+    if (m.x >= s.x && m.x < s.x + s.s && m.y >= s.y && m.y < s.y + s.s) {
+      const c = Math.floor(((m.x - s.x) / s.s) * 28), r = Math.floor(((m.y - s.y) / s.s) * 28), i = r * 28 + c;
+      for (const q of slots) { const cs = q.s / 28; g.strokeStyle = '#fff'; g.lineWidth = 1.5; g.strokeRect(q.x + c * cs - 0.5, q.y + r * cs - 0.5, cs + 1, cs + 1); }
+      tip(g, m.x, m.y, [[`Píxel fila ${r + 1}, columna ${c + 1}`, 'h'], [`x      = ${D.x[i].toFixed(2)}`, 'v'], [`w      = ${sgn(W0j[i], 3)}`, 'v'], [`w · x  = ${sgn(D.contrib[i], 3)}`, 'v']]);
+      return true;
+    }
+  }
+  return false;
+}
+function triple(g, slots, tX, tW, tC, cRev, al = 1, small = false) {
+  const labels = ['Entrada  x', 'Pesos  w', 'Aporte  w · x'];
+  slots.forEach((s, i) => {
+    g.fillStyle = rgba(RGB.tile); g.fillRect(s.x, s.y, s.s, s.s);
+    if (i === 0) drawTile(g, tX, s.x, s.y, s.s, s.s, al);
+    if (i === 1) drawTile(g, tW, s.x, s.y, s.s, s.s, 1);
+    if (i === 2 && cRev > 0) { g.save(); g.beginPath(); g.rect(s.x, s.y, s.s, s.s * cRev); g.clip(); drawTile(g, tC, s.x, s.y, s.s); g.restore(); }
+    if (s.s > 200) gridOver(g, s.x, s.y, s.s, 0.35);
+    frame(g, s.x, s.y, s.s, s.s, i === 2 ? rgba(RGB.pos, 0.6) : LINE);
+    txt(g, labels[i], s.x + s.s / 2, s.y + s.s + (small ? 22 : 30), { s: small ? 14 : 17, w: 700, a: 'center', c: i === 2 ? POS : INK, al: i === 1 ? 1 : al });
+  });
+  const fs = small ? 34 : 50;
+  txt(g, '×', (slots[0].x + slots[0].s + slots[1].x) / 2, slots[0].y + slots[0].s / 2, { s: fs, f: FD, a: 'center', b: 'middle', c: MUTED, al });
+  txt(g, '=', (slots[1].x + slots[1].s + slots[2].x) / 2, slots[0].y + slots[0].s / 2, { s: fs, f: FD, a: 'center', b: 'middle', c: MUTED, al });
+}
+function drawCh2(g, beat, t) {
+  const j = D.j, x = D.x;
+  const tX = tile('x', S.VER, x, cmGray);
+  const tW = weightTile(NET, j, 'w' + j, 0);
+  const tC = tile('c', S.VER, D.contrib, cmDiv(D.cMax));
+  const G0 = { x: 70, y: 120, s: 420 }, N = { x: 880, y: 330, r: 40 };
+  const S2 = [{ x: 50, y: 165, s: 270 }, { x: 425, y: 165, s: 270 }, { x: 800, y: 165, s: 270 }];
+  const S3 = [{ x: 70, y: 46, s: 150 }, { x: 290, y: 46, s: 150 }, { x: 510, y: 46, s: 150 }];
+
+  if (beat <= 1) {
+    const lr = beat === 0 ? prog(t, 1500, 200) : 1;
+    fanLines(g, G0, N, j, lr);
+    drawTile(g, tX, G0.x, G0.y, G0.s);
+    if (beat === 1) drawTile(g, tW, G0.x, G0.y, G0.s, G0.s, ease(prog(t, 1000)));
+    gridOver(g, G0.x, G0.y, G0.s, 0.55);
+    frame(g, G0.x, G0.y, G0.s, G0.s);
+    neuron(g, N.x, N.y, N.r, 0);
+    txt(g, '?', N.x, N.y + 1, { s: 30, f: FD, w: 700, a: 'center', b: 'middle', c: MUTED });
+    txt(g, `Neurona ${j + 1} de 16`, N.x, N.y + N.r + 30, { s: 18, f: FD, w: 700, a: 'center' });
+    txt(g, 'capa oculta 1', N.x, N.y + N.r + 52, { s: 14, a: 'center', c: MUTED });
+    txt(g, '784 conexiones', (G0.x + G0.s + N.x) / 2 + 30, N.y - 150, { s: 14, a: 'center', c: MUTED, al: lr });
+    if (beat === 0) {
+      cap(g, 'Entrada: 784 píxeles', G0.x, G0.y - 16);
+      const ca = prog(t, 500, 1800);
+      if (ca > 0) {  // un peso concreto
+        const i = D.iStar, w = NET.W[0][j * 784 + i], c = G0.s / 28;
+        const px = G0.x + ((i % 28) + 0.5) * c, py = G0.y + (Math.floor(i / 28) + 0.5) * c;
+        g.globalAlpha = ca;
+        seg(g, px, py, N.x - N.r, N.y, rgba(w > 0 ? RGB.hot : RGB.neg), 2.2);
+        g.strokeStyle = '#fff'; g.lineWidth = 2; g.strokeRect(px - c / 2, py - c / 2, c, c);
+        const lx = lerp(px, N.x, 0.55), ly = lerp(py, N.y, 0.55) - 16;
+        g.fillStyle = 'rgba(16,24,47,.95)'; rrect(g, lx - 70, ly - 22, 140, 30, 6); g.fill();
+        txt(g, `w = ${sgn(w, 3)}`, lx, ly - 2, { s: 15, f: FM, a: 'center', c: w > 0 ? POS : NEG });
+        g.globalAlpha = 1;
+      }
+    } else {
+      cap(g, 'Los mismos 784 pesos, acomodados como imagen', G0.x, G0.y - 16, { c: POS });
+      divLegend(g, G0.x, G0.y + G0.s + 18, G0.s, prog(t, 600, 600));
+    }
+    return;
+  }
+
+  if (beat === 2) {
+    const e = ease(prog(t, 900));
+    const slots = [S2[0], lerpBox(G0, S2[1], e), S2[2]];
+    triple(g, slots, tX, tW, tC, prog(t, 1300, 950), e);
+    if (!cellHover(g, S2) && prog(t, 1, 2400) >= 1) txt(g, 'Pasa el cursor sobre un píxel para ver la multiplicación', VW / 2, 560, { s: 14, a: 'center', c: FAINT });
+    divLegend(g, S2[2].x, S2[2].y + S2[2].s + 46, S2[2].s, prog(t, 500, 2200), ['resta', '0', 'suma']);
+    return;
+  }
+
+  if (beat <= 4) {
+    const e = beat === 3 ? ease(prog(t, 800)) : 1;
+    const slots = S2.map((s, i) => lerpBox(s, S3[i], e));
+    triple(g, slots, tX, tW, tC, 1, 1, e > 0.5);
+    const k = beat === 3 ? ease(prog(t, 1300, 700)) : 1, pa = beat === 3 ? prog(t, 400, 600) : 1;
+    // suma ponderada
+    if (pa > 0) {
+      g.globalAlpha = pa;
+      arrow(g, S3[2].x + S3[2].s / 2, S3[2].y + S3[2].s + 34, S3[2].x + S3[2].s / 2, 262, MUTED);
+      txt(g, 'sumar los 784 aportes', S3[2].x + S3[2].s / 2 + 12, 248, { s: 13, c: MUTED });
+      const rows = [['Suma de aportes positivos', D.sp, RGB.pos], ['Suma de aportes negativos', D.sn, RGB.neg], ['Sesgo  b', D.b, D.b >= 0 ? RGB.pos : RGB.neg]];
+      const mv = Math.max(D.sp, -D.sn, Math.abs(D.b), 1e-6);
+      rows.forEach(([lab, v, col], i) => {
+        const y = 310 + i * 56, w = (250 * Math.abs(v)) / mv;
+        txt(g, lab, 70, y + 6, { s: 16, c: MUTED });
+        g.fillStyle = rgba(RGB.line, 0.5); g.fillRect(320, y - 9, 250, 18);
+        g.fillStyle = rgba(col, 0.9); g.fillRect(320, y - 9, Math.max(1.5, w * k), 18);
+        txt(g, sgn(v * k), 584, y + 6, { s: 16, f: FM, w: 600, c: rgba(col) });
+      });
+      seg(g, 70, 470, 660, 470, LINE);
+      txt(g, 'z =', 70, 530, { s: 34, f: FD, w: 700 });
+      txt(g, num(D.z * k), 140, 532, { s: 42, f: FM, w: 600, c: '#fff' });
+      txt(g, 'suma ponderada: 784 multiplicaciones + el sesgo', 70, 566, { s: 14, c: FAINT });
+      g.globalAlpha = 1;
+    }
+    if (beat === 4) reluPanel(g, t);
+    cellHover(g, S3);
+    return;
+  }
+
+  // beat 5: las 16 neuronas
+  const e = prog(t, 700);
+  txt(g, 'Capa oculta 1: 16 neuronas, cada una con su propio patrón de pesos', 53, 92, { s: 21, f: FD, w: 700, al: e });
+  drawTile(g, tX, 1007, 44, 60, 60, e); frame(g, 1007, 44, 60, 60);
+  txt(g, 'entrada', 1037, 120, { s: 12, c: MUTED, a: 'center', al: e });
+  for (let k = 0; k < 16; k++) {
+    const a = D.F.a[1][k], bb = clamp(a / NET.scales[1]), tk = prog(t, 400, 150 + k * 45);
+    const tx = 53 + (k % 8) * 130, ty = 172 + Math.floor(k / 8) * 252, s = 104;
+    if (tk <= 0) continue;
+    g.globalAlpha = tk;
+    if (bb > 0) { g.save(); g.shadowColor = rgba(RGB.pos, 0.9); g.shadowBlur = 26 * bb; g.fillStyle = rgba(RGB.pos, 0.25 + 0.6 * bb); g.fillRect(tx - 3, ty - 3, s + 6, s + 6); g.restore(); }
+    drawTile(g, weightTile(NET, k, 'w' + k, 0), tx, ty, s);
+    frame(g, tx, ty, s, s, k === D.j ? '#ffffff' : LINE, k === D.j ? 2 : 1);
+    txt(g, `n${k + 1}`, tx, ty - 10, { s: 13, w: 700, c: k === D.j ? INK : MUTED });
+    g.fillStyle = rgba(RGB.line, 0.6); g.fillRect(tx, ty + s + 14, s, 8);
+    g.fillStyle = POS; g.fillRect(tx, ty + s + 14, s * bb * tk, 8);
+    txt(g, `a = ${num(a)}`, tx, ty + s + 42, { s: 14, f: FM, c: a > 0 ? INK : FAINT });
+    if (k === D.j) txt(g, 'la de antes', tx + s, ty - 10, { s: 12, c: POS, a: 'right' });
+    if (DEAD[0].has(k)) txt(g, 'neurona muerta', tx + s / 2, ty + s / 2 + 4, { s: 12, c: ERR, a: 'center' });
+    g.globalAlpha = 1;
+  }
+  const m = S.mouse;
+  if (m.in) for (let k = 0; k < 16; k++) {
+    const tx = 53 + (k % 8) * 130, ty = 172 + Math.floor(k / 8) * 252;
+    if (m.x >= tx && m.x < tx + 104 && m.y >= ty && m.y < ty + 104) {
+      tip(g, m.x, m.y, [[`Neurona ${k + 1}`, 'h'], [`z = ${num(D.F.z[0][k])}`, 'v'], [`a = ReLU(z) = ${num(D.F.a[1][k])}`, 'v'], [DEAD[0].has(k) ? 'nunca se activa con ninguna imagen de prueba' : D.F.a[1][k] > 0 ? 'se activa con este dígito' : 'z negativo: queda apagada', 'm']]);
+    }
+  }
+}
+function reluPanel(g, t) {
+  const PX = 730, PY = 262, PW = 240, PH = 250, ap = prog(t, 500);
+  const zr = Math.max(3, Math.abs(D.z) * 1.25);
+  const X = z => PX + ((z + zr) / (2 * zr)) * PW, Y = a => PY + PH * 0.88 - (a / zr) * PH * 0.82;
+  g.globalAlpha = ap;
+  cap(g, 'Activación ReLU', PX, PY - 22, { c: POS });
+  txt(g, 'a = máx(0, z)', PX + 150, PY - 22, { s: 13, f: FM, c: MUTED });
+  seg(g, PX, Y(0), PX + PW, Y(0), MUTED); seg(g, X(0), PY, X(0), PY + PH, MUTED);
+  txt(g, 'z', PX + PW + 8, Y(0) + 5, { s: 14, f: FM, c: MUTED });
+  txt(g, 'a', X(0) - 8, PY + 6, { s: 14, f: FM, c: MUTED, a: 'right' });
+  g.strokeStyle = POS; g.lineWidth = 3; g.beginPath(); g.moveTo(X(-zr), Y(0)); g.lineTo(X(0), Y(0)); g.lineTo(X(zr), Y(zr)); g.stroke();
+  const p1 = ease(prog(t, 800, 450)), p2 = ease(prog(t, 600, 1350)), p3 = prog(t, 500, 1950);
+  const zc = D.z * p1, ac = Math.max(0, D.z);
+  g.fillStyle = '#fff'; g.beginPath(); g.arc(X(zc), Y(0), 5, 0, 7); g.fill();
+  txt(g, `z = ${num(D.z)}`, X(D.z), Y(0) + 24, { s: 14, f: FM, a: 'center', al: p1 });
+  if (p2 > 0) {
+    g.setLineDash([4, 4]); seg(g, X(D.z), Y(0), X(D.z), Y(ac * p2), '#fff', 1.5); g.setLineDash([]);
+    g.fillStyle = POS; g.beginPath(); g.arc(X(D.z), Y(ac * p2), 6, 0, 7); g.fill();
+    txt(g, `a = ${num(ac)}`, X(D.z) - 10, Y(ac) - 12, { s: 14, f: FM, a: 'right', c: POS, al: p2 });
+  }
+  const NX = 1050, NY = 395;
+  arrow(g, PX + PW + 18, NY, NX - 44, NY, rgba(RGB.muted, p3), 1.5);
+  neuron(g, NX, NY, 34, (ac / NET.scales[1]) * p3);
+  txt(g, `a = ${num(ac)}`, NX, NY + 58, { s: 15, f: FM, a: 'center', al: p3 });
+  txt(g, 'activación', NX, NY + 78, { s: 13, a: 'center', c: MUTED, al: p3 });
+  g.globalAlpha = 1;
+}
+
+/* ======================================================================
+   Capítulo 3 — La red completa
+   ====================================================================== */
+function drawCh3(g, beat, t) {
+  const Lo = netLayout({ x: 40, y: 18, w: 1040, h: 610 }, { imgS: 124, xs: [0.2, 0.46, 0.665, 0.85] });
+  const fwd = beat === 0 ? 0 : beat === 1 ? prog(t, 1800) : beat === 2 ? 1 + prog(t, 1500) : 2 + prog(t, 1500);
+  layerLabels(g, Lo, beat === 0 ? -1 : beat);
+  drawNet(g, Lo, NET, D.F, { fwd, outMode: 'z', truth: D.y });
+  const pa = beat === 0 ? prog(t, 600, 300) : 0;
+  if (pa > 0) {
+    const yb = VH - 12, c = Lo.col.x + Lo.col.w, h1 = Lo.layers[1][0].x, h2 = Lo.layers[2][0].x, o = Lo.layers[3][0].x;
+    txt(g, '12 544 pesos + 16 sesgos', (c + h1) / 2, yb, { s: 13, a: 'center', c: MUTED, al: pa });
+    txt(g, '256 + 16', (h1 + h2) / 2, yb, { s: 13, a: 'center', c: MUTED, al: pa });
+    txt(g, '160 + 10', (h2 + o) / 2, yb, { s: 13, a: 'center', c: MUTED, al: pa });
+  }
+}
+
+/* ======================================================================
+   Capítulo 4 — La decisión (softmax)
+   ====================================================================== */
+function drawCh4(g, beat, t) {
+  const Lo = netLayout({ x: 16, y: 18, w: 620, h: 610 }, { imgS: 84, xs: [0.24, 0.51, 0.74, 0.94] });
+  layerLabels(g, Lo, 3, 1, true);
+  const F = D.F;
+  drawNet(g, Lo, NET, F, { fwd: 3, outMode: beat === 0 ? 'z' : 'p', truth: D.y, outLabels: false });
+  const z = F.z[2], p = F.p, outs = Lo.layers[3];
+  let zm = 1e-6; for (const v of z) zm = Math.max(zm, Math.abs(v));
+  const CX = 915, HW = 140, P0 = 728, PW = 330;
+  const m = beat === 0 ? 0 : beat === 1 ? ease(prog(t, 1400, 250)) : 1;
+  txt(g, 'Puntaje z', CX, 34, { s: 18, f: FD, w: 700, a: 'center', al: 1 - m });
+  txt(g, 'Probabilidad (softmax)', P0, 34, { s: 18, f: FD, w: 700, al: m });
+  if (m < 1) { g.globalAlpha = 1 - m; seg(g, CX, 70, CX, 600, MUTED); txt(g, '0', CX, 64, { s: 12, f: FM, a: 'center', c: MUTED }); g.globalAlpha = 1; }
+  if (m > 0) {
+    g.globalAlpha = m;
+    [0, 0.5, 1].forEach(v => { seg(g, P0 + v * PW, 70, P0 + v * PW, 600, rgba(RGB.line, 0.8)); txt(g, `${v * 100} %`, P0 + v * PW, 64, { s: 12, f: FM, a: 'center', c: MUTED }); });
+    g.globalAlpha = 1;
+  }
+  outs.forEach((n, k) => {
+    seg(g, n.x + n.r + 4, n.y, 688, n.y, rgba(RGB.line, 0.45), 1);
+    const zl = Math.min(CX, CX + (z[k] / zm) * HW), zr = Math.max(CX, CX + (z[k] / zm) * HW);
+    const l = lerp(zl, P0, m), r = lerp(zr, P0 + p[k] * PW, m);
+    const base = z[k] >= 0 ? RGB.pos : RGB.neg, col = mix(base, k === F.pred ? RGB.hot : RGB.pos, m);
+    const al = beat === 2 ? (k === F.pred ? 1 : 0.4) : 0.88;
+    if (beat === 2 && k === F.pred) { g.save(); g.shadowColor = POS; g.shadowBlur = 22; }
+    g.fillStyle = rgba(col, al); g.fillRect(l, n.y - 13, Math.max(r - l, 2), 26);
+    if (beat === 2 && k === F.pred) g.restore();
+    txt(g, String(k), 704, n.y + 8, { s: 22, f: FD, w: 700, a: 'center', c: k === D.y ? OK : INK });
+    if (m < 1) txt(g, num(z[k], 1), z[k] >= 0 ? zr + 8 : zl - 8, n.y + 5, { s: 13, f: FM, a: z[k] >= 0 ? 'left' : 'right', c: MUTED, al: 1 - m });
+    if (m > 0) txt(g, pct(p[k], p[k] < 0.001 ? 2 : 1), Math.max(r, P0) + 8, n.y + 5, { s: 13, f: FM, c: k === F.pred ? INK : MUTED, al: m });
+  });
+  if (beat >= 1) txt(g, 'suma de las 10 = 100 %', P0 + PW, 622, { s: 13, c: FAINT, a: 'right', al: m });
+  if (beat === 2) {
+    const ra = prog(t, 500, 200), ok = F.pred === D.y;
+    txt(g, `Predicción: ${F.pred}`, P0, 652, { s: 20, f: FD, w: 700, al: ra });
+    txt(g, `Etiqueta real: ${D.y}`, P0 + 172, 652, { s: 16, c: MUTED, al: ra });
+    g.globalAlpha = ra; (ok ? check : cross)(g, P0 + 300, 646, 14, ok ? OK : ERR); g.globalAlpha = 1;
+  }
+}
+
+/* ======================================================================
+   Capítulo 5 — El aprendizaje
+   ====================================================================== */
+function tilesGrid(g, net, prefix, ver, x0, y0, s, gap, al = 1) {
+  for (let k = 0; k < 16; k++) {
+    const x = x0 + (k % 4) * (s + gap), y = y0 + Math.floor(k / 4) * (s + gap);
+    drawTile(g, weightTile(net, k, prefix + k, ver), x, y, s, s, al);
+    frame(g, x, y, s, s);
+  }
+}
+function rowLegend(g, x, y, items) {
+  let xx = x;
+  for (const [c, label] of items) { g.fillStyle = c; g.fillRect(xx, y - 9, 12, 12); txt(g, label, xx + 18, y + 2, { s: 13, c: MUTED }); g.font = `400 13px ${FB}`; xx += 34 + g.measureText(label).width; }
+}
+function chart(g, X, Y, W, H, pts, key, ymax, col, title, fmtv) {
+  cap(g, title, X, Y - 12);
+  const last = pts[pts.length - 1];
+  txt(g, fmtv(last[key]), X + W, Y - 10, { s: 15, f: FM, w: 600, a: 'right', c: rgba(col) });
+  g.fillStyle = rgba(RGB.tile, 0.8); g.fillRect(X, Y, W, H);
+  [0.5].forEach(v => seg(g, X, Y + H * v, X + W, Y + H * v, rgba(RGB.line, 0.6)));
+  frame(g, X, Y, W, H);
+  txt(g, fmtv(ymax), X + 6, Y + 14, { s: 11, f: FM, c: FAINT });
+  txt(g, fmtv(0), X + 6, Y + H - 6, { s: 11, f: FM, c: FAINT });
+  const maxX = Math.max(3 * EPOCH, last.seen * 1.04);
+  const px = s => X + (s / maxX) * W, py = v => Y + H - clamp(v / ymax) * H;
+  g.beginPath(); pts.forEach((p, i) => (i ? g.lineTo(px(p.seen), py(p[key])) : g.moveTo(px(p.seen), py(p[key]))));
+  g.strokeStyle = rgba(col); g.lineWidth = 2.2; g.stroke();
+  g.lineTo(px(last.seen), Y + H); g.lineTo(px(pts[0].seen), Y + H); g.closePath(); g.fillStyle = rgba(col, 0.1); g.fill();
+  g.fillStyle = rgba(col); g.beginPath(); g.arc(px(last.seen), py(last[key]), 4, 0, 7); g.fill();
+  txt(g, `${grp(maxX)} imágenes`, X + W, Y + H + 16, { s: 11, c: FAINT, a: 'right' });
+}
+function drawCh5(g, beat, t) {
+  const Lo = netLayout({ x: 14, y: 18, w: 600, h: 610 }, { imgS: 72, xs: [0.19, 0.46, 0.65, 0.8] });
+  const outs = Lo.layers[3];
+  layerLabels(g, Lo, -1, 1, true);
+  if (beat === 4) {
+    const F = LIVE.forward(D.x);
+    drawNet(g, Lo, LIVE, F, { fwd: 3, bars: true, barW: 40, truth: D.y, key: 'L' });
+    trainPanel(g);
+    return;
+  }
+  const { net0, F0, delta } = L5, y = D.y;
+  if (beat === 0) {
+    drawNet(g, Lo, net0, F0, { fwd: prog(t, 2400, 300) * 3, bars: true, barW: 40, truth: y });
+    const e = prog(t, 600);
+    txt(g, 'Pesos iniciales de la capa 1', 650, 52, { s: 18, f: FD, w: 700, al: e });
+    txt(g, 'números aleatorios: todavía no buscan ningún patrón', 650, 74, { s: 13, c: MUTED, al: e });
+    tilesGrid(g, net0, 'n0w', L5.id, 650, 92, 78, 12, e);
+    const sa = prog(t, 600, 1800);
+    cap(g, 'Aciertos con pesos al azar', 650, 488, { al: sa });
+    txt(g, pct(L5.acc0), 650, 540, { s: 46, f: FD, w: 800, c: ERR, al: sa });
+    txt(g, 'en 1 000 imágenes de prueba (al azar sería ~10 %)', 650, 568, { s: 13, c: MUTED, al: sa });
+    return;
+  }
+  if (beat === 1) {
+    drawNet(g, Lo, net0, F0, { fwd: 3, truth: y });
+    const e = ease(prog(t, 900, 100));
+    txt(g, 'Respuesta correcta vs. predicción', 650, 44, { s: 18, f: FD, w: 700 });
+    rowLegend(g, 650, 70, [[OK, 'correcta  y'], [POS, 'predicción  p']]);
+    outs.forEach((n, k) => {
+      txt(g, String(k), 668, n.y + 7, { s: 20, f: FD, w: 700, a: 'center', c: k === y ? OK : INK });
+      g.fillStyle = rgba(RGB.line, 0.45); g.fillRect(690, n.y - 12, 360, 10); g.fillRect(690, n.y + 2, 360, 10);
+      if (k === y) { g.fillStyle = rgba(RGB.ok, 0.9); g.fillRect(690, n.y - 12, 360 * e, 10); }
+      g.fillStyle = POS; g.fillRect(690, n.y + 2, Math.max(1, 360 * F0.p[k] * e), 10);
+      txt(g, pct(F0.p[k]), 1058, n.y + 11, { s: 11, f: FM, c: MUTED, a: 'right', al: e > 0.9 ? 0 : 0 });
+      txt(g, pct(F0.p[k]), 690 + 360 * F0.p[k] * e + 6, n.y + 11, { s: 11, f: FM, c: MUTED });
+    });
+    const L = -Math.log(F0.p[y]), la = prog(t, 500, 1000);
+    txt(g, `L = −log(${F0.p[y].toFixed(3)}) = ${L.toFixed(2)}`, 650, 640, { s: 22, f: FM, w: 600, c: ERR, al: la });
+    return;
+  }
+  if (beat === 2) {
+    const bp = prog(t, 2700, 300) * 3;
+    drawNet(g, Lo, net0, F0, { fwd: 3, truth: y, back: bp, delta, dimIn: 0.35 });
+    const e = ease(prog(t, 700));
+    txt(g, 'Señal de error en la salida', 650, 44, { s: 18, f: FD, w: 700 });
+    txt(g, 'δ = p − y', 650, 68, { s: 15, f: FM, c: ERR });
+    const CX = 880, SC = 190, d = delta[2];
+    seg(g, CX, outs[0].y - 22, CX, outs[9].y + 22, MUTED);
+    outs.forEach((n, k) => {
+      txt(g, String(k), 668, n.y + 7, { s: 20, f: FD, w: 700, a: 'center', c: k === y ? OK : INK });
+      const v = d[k] * e, w = v * SC;
+      g.fillStyle = rgba(v < 0 ? RGB.ok : RGB.err, 0.9); g.fillRect(Math.min(CX, CX + w), n.y - 9, Math.max(1.5, Math.abs(w)), 18);
+      txt(g, sgn(d[k], 2), v < 0 ? CX + 10 : CX - 10, n.y + 5, { s: 12, f: FM, a: v < 0 ? 'left' : 'right', c: MUTED, al: e });
+    });
+    const ny = outs[y].y;
+    txt(g, '← debe subir', CX + 62, ny + 5, { s: 13, w: 700, c: OK, al: prog(t, 400, 800) });
+    txt(g, 'las demás deben bajar', CX + 40, outs[9].y + 50, { s: 13, c: ERR, al: prog(t, 400, 1000) });
+    return;
+  }
+  // beat 3: un paso de descenso del gradiente
+  const k = prog(t, 900, 500), after = k > 0.5;
+  drawNet(g, Lo, after ? L5.net1 : net0, after ? L5.F1 : F0, { fwd: 3, truth: y });
+  if (k > 0 && k < 1) { g.save(); g.globalCompositeOperation = 'lighter'; g.fillStyle = rgba(RGB.err, 0.12 * Math.sin(k * Math.PI)); g.fillRect(Lo.col.x, Lo.top, outs[0].x - Lo.col.x, Lo.H); g.restore(); }
+  txt(g, 'Antes y después de un ajuste', 650, 44, { s: 18, f: FD, w: 700 });
+  rowLegend(g, 650, 70, [[FAINT, 'antes'], [POS, 'después  (η = 0.1)']]);
+  const p0 = F0.p, p1 = L5.F1.p;
+  outs.forEach((n, q) => {
+    txt(g, String(q), 668, n.y + 7, { s: 20, f: FD, w: 700, a: 'center', c: q === y ? OK : INK });
+    g.fillStyle = FAINT; g.fillRect(690, n.y - 12, Math.max(1, 360 * p0[q]), 10);
+    g.fillStyle = q === y ? rgba(RGB.hot) : POS; g.fillRect(690, n.y + 2, Math.max(1, 360 * lerp(p0[q], p1[q], k)), 10);
+  });
+  const ny = outs[y].y, ra = prog(t, 500, 1300);
+  txt(g, `${pct(p0[y])} → ${pct(p1[y])}`, 690 + 360 * Math.max(p0[y], p1[y]) + 12, ny + 5, { s: 14, f: FM, w: 600, c: OK, al: ra });
+  txt(g, `L: ${(-Math.log(p0[y])).toFixed(2)} → ${(-Math.log(p1[y])).toFixed(2)}`, 650, 640, { s: 22, f: FM, w: 600, c: ERR, al: ra });
+}
+function trainPanel(g) {
+  const last = TR.hist[TR.hist.length - 1];
+  txt(g, 'Pesos de la capa 1', 650, 46, { s: 17, f: FD, w: 700 });
+  tilesGrid(g, LIVE, 'lw', LIVE.version, 650, 60, 60, 8);
+  const sx = 940;
+  const stat = (lab, val, y, c = INK) => { cap(g, lab, sx, y); txt(g, val, sx, y + 26, { s: 22, f: FD, w: 700, c }); };
+  stat('Imágenes vistas', grp(LIVE.seen), 76);
+  stat('Época', `${Math.min(MAX_EPOCHS, Math.floor(LIVE.seen / EPOCH) + (TR.done ? 0 : 1))} de ${MAX_EPOCHS}`, 136);
+  stat('Pérdida', (TR.ema ?? last.loss).toFixed(3), 196, ERR);
+  stat('Aciertos (prueba)', pct(last.acc), 256, OK);
+  const st = TR.done ? 'Terminado' : TR.running ? 'Entrenando…' : 'En pausa';
+  const pulse = TR.running ? 0.6 + 0.4 * Math.sin(performance.now() / 250) : 1;
+  g.fillStyle = rgba(TR.running ? RGB.ok : RGB.muted, pulse); g.beginPath(); g.arc(sx + 6, 326, 5, 0, 7); g.fill();
+  txt(g, st, sx + 18, 331, { s: 14, w: 700, c: TR.running ? OK : MUTED });
+  txt(g, `η = ${etaNow().toFixed(3)}`, sx, 352, { s: 12, f: FM, c: FAINT });
+  chart(g, 650, 392, 440, 92, TR.hist, 'loss', 2.5, RGB.err, 'Pérdida (entropía cruzada)', v => v.toFixed(2));
+  chart(g, 650, 532, 440, 92, TR.hist, 'acc', 1, RGB.ok, 'Aciertos en 1 000 imágenes de prueba', v => pct(v, 0));
+}
+
+/* ======================================================================
+   Capítulo 6 — Tu turno (dibujo libre)
+   ====================================================================== */
+const PAD = { x: 40, y: 164, s: 290 };
+const padC = document.createElement('canvas'); padC.width = padC.height = 280;
+const padG = padC.getContext('2d', { willReadFrequently: true });
+function clearPad() { padG.fillStyle = '#000'; padG.fillRect(0, 0, 280, 280); S6.dirty = true; }
+function padFromSample(k) {
+  clearPad();
+  const c = tile('padsrc', k, DATA.test.X.subarray(k * 784, k * 784 + 784), cmGray);
+  padG.imageSmoothingEnabled = true; padG.imageSmoothingQuality = 'high';
+  padG.drawImage(c, 0, 0, 280, 280);
+  S6.sampleX = DATA.test.X.slice(k * 784, k * 784 + 784);
+  S6.fromSample = true; S6.dirty = true;
+}
+function padStroke(a, b) {
+  padG.strokeStyle = '#fff'; padG.lineWidth = 23; padG.lineCap = 'round'; padG.lineJoin = 'round';
+  padG.beginPath(); padG.moveTo(a.x, a.y); padG.lineTo(b.x + 0.01, b.y); padG.stroke();
+  S6.dirty = true;
+}
+/* Preprocesado igual que MNIST: recortar, escalar a 20×20 manteniendo proporción y centrar por centro de masa en 28×28 */
+function preprocess() {
+  const N = 280, d = padG.getImageData(0, 0, N, N).data, g0 = new Float32Array(N * N);
+  let minx = N, miny = N, maxx = -1, maxy = -1;
+  for (let i = 0; i < N * N; i++) {
+    const v = d[i * 4] / 255; g0[i] = v;
+    if (v > 0.08) { const xx = i % N, yy = (i / N) | 0; if (xx < minx) minx = xx; if (xx > maxx) maxx = xx; if (yy < miny) miny = yy; if (yy > maxy) maxy = yy; }
+  }
+  const out = new Float32Array(784);
+  if (maxx < 0) return { x: out, empty: true };
+  const bw = maxx - minx + 1, bh = maxy - miny + 1, sc = 20 / Math.max(bw, bh);
+  const tw = Math.max(1, Math.round(bw * sc)), th = Math.max(1, Math.round(bh * sc));
+  const small = new Float32Array(tw * th);
+  for (let ty = 0; ty < th; ty++) {
+    const y0 = miny + ty / sc, y1 = miny + (ty + 1) / sc;
+    for (let tx = 0; tx < tw; tx++) {
+      const x0 = minx + tx / sc, x1 = minx + (tx + 1) / sc;
+      let s = 0, n = 0;
+      for (let yy = Math.floor(y0); yy < Math.max(Math.ceil(y1), Math.floor(y0) + 1); yy++) for (let xx = Math.floor(x0); xx < Math.max(Math.ceil(x1), Math.floor(x0) + 1); xx++) {
+        if (xx < 0 || yy < 0 || xx >= N || yy >= N) continue; s += g0[yy * N + xx]; n++;
+      }
+      small[ty * tw + tx] = n ? s / n : 0;
+    }
+  }
+  let m = 0, cx = 0, cy = 0;
+  for (let ty = 0; ty < th; ty++) for (let tx = 0; tx < tw; tx++) { const v = small[ty * tw + tx]; m += v; cx += v * tx; cy += v * ty; }
+  cx /= m || 1; cy /= m || 1;
+  const ox = Math.round(13.5 - cx), oy = Math.round(13.5 - cy);
+  let mx = 0;
+  for (let ty = 0; ty < th; ty++) for (let tx = 0; tx < tw; tx++) {
+    const X = tx + ox, Y = ty + oy; if (X < 0 || Y < 0 || X > 27 || Y > 27) continue;
+    out[Y * 28 + X] = small[ty * tw + tx]; if (out[Y * 28 + X] > mx) mx = out[Y * 28 + X];
+  }
+  if (mx > 0) for (let i = 0; i < 784; i++) out[i] = Math.min(1, out[i] / mx);
+  return { x: out, empty: false };
+}
+const net6 = () => (S6.net === 'live' && LIVE.seen >= EPOCH ? LIVE : NET);
+function updatePad() {
+  const r = S6.fromSample ? { x: S6.sampleX, empty: false } : preprocess();
+  S6.x = r.x; S6.empty = r.empty; S6.F = net6().forward(S6.x); S6.ver++; S6.dirty = false;
+}
+function drawCh6(g) {
+  if (S6.dirty) updatePad();
+  const net = net6(), F = S6.F;
+  if (!S6.empty && F) {
+    txt(g, 'La red cree que es un', 40, 46, { s: 15, c: MUTED });
+    txt(g, String(F.pred), 40, 118, { s: 72, f: FD, w: 800, c: POS });
+    txt(g, pct(F.p[F.pred]), 100, 96, { s: 22, f: FM, w: 600 });
+    txt(g, 'de confianza', 100, 116, { s: 13, c: MUTED });
+  } else {
+    txt(g, 'Dibuja un dígito del 0 al 9', 40, 96, { s: 24, f: FD, w: 700 });
+  }
+  cap(g, 'Dibuja aquí', PAD.x, PAD.y - 12, { c: POS });
+  g.fillStyle = '#000'; g.fillRect(PAD.x, PAD.y, PAD.s, PAD.s);
+  drawTile(g, padC, PAD.x, PAD.y, PAD.s, PAD.s, 1, true);
+  if (S6.empty) {
+    g.setLineDash([6, 6]); frame(g, PAD.x, PAD.y, PAD.s, PAD.s, POS, 1.5); g.setLineDash([]);
+    txt(g, 'con el mouse o el dedo', PAD.x + PAD.s / 2, PAD.y + PAD.s / 2 + 6, { s: 15, c: FAINT, a: 'center' });
+  } else frame(g, PAD.x, PAD.y, PAD.s, PAD.s, LINE, 1.5);
+  if (S6.fromSample) txt(g, 'ejemplo de MNIST · dibuja para reemplazarlo', PAD.x + PAD.s / 2, PAD.y + PAD.s - 12, { s: 12, c: MUTED, a: 'center' });
+  const pv = { x: PAD.x, y: PAD.y + PAD.s + 34, s: 96 };
+  drawTile(g, tile('p6', S6.ver, S6.x, cmGray), pv.x, pv.y, pv.s); gridOver(g, pv.x, pv.y, pv.s, 0.4); frame(g, pv.x, pv.y, pv.s, pv.s);
+  txt(g, 'Lo que ve la red', pv.x + pv.s + 16, pv.y + 34, { s: 16, w: 700 });
+  txt(g, '28 × 28 píxeles, centrado', pv.x + pv.s + 16, pv.y + 56, { s: 13, c: MUTED });
+  txt(g, 'como en MNIST', pv.x + pv.s + 16, pv.y + 74, { s: 13, c: MUTED });
+  const Lo = netLayout({ x: 372, y: 18, w: 728, h: 610 }, { img: false, xs: [0.04, 0.37, 0.6, 0.78] });
+  layerLabels(g, Lo);
+  arrow(g, PAD.x + PAD.s + 10, PAD.y + PAD.s / 2, Lo.col.x - 8, PAD.y + PAD.s / 2, rgba(RGB.muted, 0.7));
+  drawNet(g, Lo, net, F || net.forward(S6.x), { fwd: S6.empty ? 0 : 3, bars: true, barW: 56, key: '6', ver: S6.ver });
+  txt(g, net === NET ? `Red entrenada con 60 000 imágenes (${pct(MODEL.testAcc)} de aciertos)` : `Tu red del capítulo 5 (${grp(LIVE.seen)} imágenes vistas)`, 1100, VH - 10, { s: 12, c: FAINT, a: 'right' });
+}
+
+/* ======================================================================
+   Guion: capítulos y pasos
+   ====================================================================== */
+const L_W = [['var(--pos)', 'peso positivo: suma'], ['var(--neg)', 'peso negativo: resta']];
+const L_N = [['var(--pos)', 'activación / aporte positivo'], ['var(--neg)', 'aporte negativo']];
+const L_T = [['var(--pos)', 'activación'], ['var(--err)', 'error y gradiente'], ['var(--ok)', 'respuesta correcta']];
+const isErr = () => D.F.pred !== D.y;
+
+const CH = [
+  {
+    title: 'La imagen', draw: drawCh1, strip: true, legend: [],
+    beats: [
+      { h: 'Una imagen de 28 × 28 píxeles', dur: 1500,
+        text: () => `<p>Así llega a la red un dígito escrito a mano. Esta imagen es del conjunto <b>MNIST</b>, que reúne 70 000 dígitos escritos por personas reales; aquí se ve un <b>${D.y}</b>.</p><p>Para la computadora no es un dibujo: es una cuadrícula de 28 × 28 = <b>784 píxeles</b>.</p>` },
+      { h: 'Cada píxel es un número', dur: 900, f: '<var>x</var> = brillo del píxel / 255',
+        text: () => `<p>Cada píxel guarda un solo número entre <b>0</b> (negro) y <b>1</b> (blanco); los grises quedan en medio.</p><p>La lupa muestra los valores reales de una zona del dígito. Estos 784 números son <b>toda</b> la información que recibe la red.</p><p class="tip">Pasa el cursor sobre la imagen para ver el valor de cada píxel.</p>` },
+      { h: 'De cuadrícula a vector', dur: 3600, f: '<var>x</var> = (<var>x</var><sub>1</sub>, <var>x</var><sub>2</sub>, …, <var>x</var><sub>784</sub>)',
+        text: () => `<p>Ponemos las 28 filas una detrás de otra y obtenemos una lista de 784 números: el <b>vector de entrada</b>.</p><p>Cada número alimenta una neurona de entrada. Desde aquí la red ya no sabe qué píxeles eran vecinos: tiene que descubrir los patrones por su cuenta.</p>` },
+    ],
+  },
+  {
+    title: 'Una neurona', draw: drawCh2, strip: true, legend: L_W,
+    beats: [
+      { h: 'Cada conexión tiene un peso', dur: 2300,
+        text: () => `<p>Miremos una sola neurona de la primera capa oculta: la <b>neurona ${D.j + 1}</b>. Está conectada con los 784 píxeles y cada conexión tiene un <b>peso</b> <var>w</var>, un número que la red aprendió al entrenar.</p><p>Naranja es peso positivo, azul es peso negativo. Cuanto más brillante, más grande es el peso.</p>` },
+      { h: 'Los pesos forman un patrón', dur: 1200,
+        text: () => `<p>Si acomodamos sus 784 pesos en la misma cuadrícula de 28 × 28, aparece el patrón que esta neurona “busca”.</p><p>Un píxel encendido sobre una zona naranja <b>suma</b>; sobre una zona azul, <b>resta</b>.</p>` },
+      { h: 'Multiplicar píxel por peso', dur: 2300, f: 'aporte<sub><var>i</var></sub> = <var>w</var><sub><var>i</var></sub> · <var>x</var><sub><var>i</var></sub>',
+        text: () => `<p>La neurona multiplica cada píxel por el peso de su conexión.</p><p>Donde el píxel es negro (0) el resultado es 0, así que solo aportan los píxeles encendidos del dígito.</p><p class="tip">Pasa el cursor sobre cualquiera de las tres imágenes para ver la multiplicación de ese píxel.</p>` },
+      { h: 'Sumar todo y agregar el sesgo', dur: 2100, f: '<var>z</var> = <var>w</var><sub>1</sub><var>x</var><sub>1</sub> + <var>w</var><sub>2</sub><var>x</var><sub>2</sub> + … + <var>w</var><sub>784</sub><var>x</var><sub>784</sub> + <var>b</var>',
+        text: () => `<p>Se suman los 784 aportes y se agrega el <b>sesgo</b> <var>b</var>, un número propio de cada neurona que la hace más fácil o más difícil de activar.</p><p>Para este ${D.y}: ${sgn(D.sp)} ${D.sn < 0 ? '−' : '+'} ${Math.abs(D.sn).toFixed(2)} ${D.b < 0 ? '−' : '+'} ${Math.abs(D.b).toFixed(2)} = <b>${num(D.z)}</b>. A este resultado <var>z</var> se le llama <b>suma ponderada</b>.</p>` },
+      { h: 'La función de activación', dur: 2500, f: '<var>a</var> = ReLU(<var>z</var>) = máx(0, <var>z</var>)',
+        text: () => `<p>Por último la neurona aplica <b>ReLU</b>: si <var>z</var> es negativo devuelve 0; si es positivo, lo deja pasar igual.</p><p>El resultado, <var>a</var> = ${num(D.a)}, es la <b>activación</b> de la neurona: qué tanto “se enciende” con esta imagen. Sin esta función, apilar capas no serviría de nada: todo se reduciría a una sola suma ponderada.</p>` },
+      { h: '16 neuronas, 16 patrones', dur: 1500, f: '<var>a</var><sup>(1)</sup> = ReLU(<var>W</var><sup>(1)</sup><var>x</var> + <var>b</var><sup>(1)</sup>)',
+        text: () => `<p>Las 16 neuronas de la capa hacen exactamente este cálculo al mismo tiempo, cada una con sus propios 784 pesos y su sesgo.</p><p>Con este ${D.y}, <b>${D.nAct} de 16</b> se activan y las demás quedan en 0. Ninguna “sabe” qué dígito es: cada una solo mide cuánto coincide la imagen con su patrón.</p>${DEAD[0].size ? `<p class="tip">La ${[...DEAD[0]].map(i => 'n' + (i + 1)).join(', ')} no se activa con ninguna imagen: es una <b>neurona muerta</b>. Le pasa de verdad a las redes con ReLU cuando, durante el entrenamiento, su suma queda siempre negativa y deja de aprender.</p>` : ''}` },
+    ],
+  },
+  {
+    title: 'La red completa', draw: drawCh3, strip: true, legend: L_N,
+    beats: [
+      { h: '784 → 16 → 16 → 10', dur: 900, f: '784·16 + 16 + 16·16 + 16 + 16·10 + 10 = 13 002',
+        text: () => `<p>La red completa tiene 4 capas: 784 entradas, dos capas ocultas de 16 neuronas y 10 salidas, una por cada dígito.</p><p>En total tiene <b>13 002 parámetros</b> (pesos y sesgos), todos ajustados con las 60 000 imágenes de entrenamiento de MNIST.</p>` },
+      { h: 'Capa oculta 1', dur: 1900, f: '<var>a</var><sup>(1)</sup> = ReLU(<var>W</var><sup>(1)</sup><var>x</var> + <var>b</var><sup>(1)</sup>)',
+        text: () => `<p>La señal viaja de izquierda a derecha. Los 784 píxeles producen las 16 activaciones de la capa oculta 1.</p><p>Cada línea es un aporte <var>w · x</var>: naranja suma, azul resta, y el brillo indica cuánto influye.</p>` },
+      { h: 'Capa oculta 2', dur: 1600, f: '<var>a</var><sup>(2)</sup> = ReLU(<var>W</var><sup>(2)</sup><var>a</var><sup>(1)</sup> + <var>b</var><sup>(2)</sup>)',
+        text: () => `<p>La capa oculta 2 hace el mismo cálculo, pero su entrada ya no son píxeles: son las 16 activaciones de la capa 1.</p><p>Las neuronas que quedaron en 0 no envían nada; por eso algunas conexiones no se encienden.</p>` },
+      { h: 'Capa de salida', dur: 1600, f: '<var>z</var><sup>(3)</sup> = <var>W</var><sup>(3)</sup><var>a</var><sup>(2)</sup> + <var>b</var><sup>(3)</sup>',
+        text: () => `<p>Cada una de las 10 salidas calcula un puntaje <var>z</var> para su dígito. Aquí el puntaje más alto es el del <b>${D.F.pred}</b>.</p><p>Este recorrido se llama <b>propagación hacia adelante</b>: solo multiplicaciones, sumas y ReLU, unas 13 000 operaciones.</p><p class="tip">Pasa el cursor sobre cualquier neurona para ver sus valores.</p>` },
+    ],
+  },
+  {
+    title: 'La decisión', draw: drawCh4, strip: true, legend: L_N,
+    beats: [
+      { h: 'Puntajes sin escala', dur: 700,
+        text: () => `<p>Las 10 salidas son puntajes (en inglés, <i>logits</i>): pueden ser negativos o positivos y no tienen tope.</p><p>Cuanto más alto el puntaje, más “apuesta” la red por ese dígito. Pero todavía no son probabilidades.</p>` },
+      { h: 'Softmax: de puntajes a probabilidades', dur: 1700, f: '<var>p</var><sub><var>k</var></sub> = <var>e</var><sup><var>z</var><sub><var>k</var></sub></sup> / (<var>e</var><sup><var>z</var><sub>0</sub></sup> + <var>e</var><sup><var>z</var><sub>1</sub></sup> + … + <var>e</var><sup><var>z</var><sub>9</sub></sup>)',
+        text: () => `<p>La función <b>softmax</b> eleva <var>e</var> a cada puntaje y divide entre la suma de todos.</p><p>Así cada salida queda entre 0 y 1, las 10 suman exactamente 1 (100 %) y el puntaje más alto se lleva la mayor parte.</p>` },
+      { h: () => (isErr() ? 'La red se equivocó' : 'La predicción'), dur: 700,
+        text: () => isErr()
+          ? `<p>La red responde <b>${D.F.pred}</b> (${pct(D.F.p[D.F.pred])}), pero la etiqueta real es <b>${D.y}</b>: <b class="bad">error</b>. ¿Tú lo habrías reconocido?</p><p>Con solo 32 neuronas ocultas acierta el ${pct(MODEL.testAcc)} de las imágenes de prueba. Las redes convolucionales, diseñadas para imágenes, superan el 99 %.</p>`
+          : `<p>La red responde <b>${D.F.pred}</b> con ${pct(D.F.p[D.F.pred])} de confianza. La etiqueta real es ${D.y}: <b class="ok">acierto</b>.</p><p>Esta red acierta el <b>${pct(MODEL.testAcc)}</b> de las 10 000 imágenes de prueba de MNIST, que nunca vio durante el entrenamiento.</p>`,
+        extras: () => `<button class="btn small" data-act="randomOk" type="button">Otro dígito</button><button class="btn small" data-act="error" type="button">Ver un error de la red</button>` },
+    ],
+  },
+  {
+    title: 'El aprendizaje', draw: drawCh5, strip: true, legend: L_T,
+    beats: [
+      { h: 'Al principio, pesos al azar', dur: 2800,
+        text: () => `<p>¿De dónde salieron los pesos? Antes de entrenar, los 13 002 parámetros son números <b>aleatorios</b>.</p><p>Con pesos al azar la red responde casi al azar: acierta el ${pct(L5.acc0, 0)} de las imágenes, parecido a adivinar entre 10 opciones.</p>` },
+      { h: 'Medir el error', dur: 1500, f: () => `<var>L</var> = −log(<var>p</var><sub>correcto</sub>) = −log(${L5.F0.p[D.y].toFixed(3)}) = ${(-Math.log(L5.F0.p[D.y])).toFixed(2)}`,
+        text: () => `<p>Le mostramos un ejemplo junto con su respuesta correcta (<b>${D.y}</b>) y medimos qué tan mal le fue con la <b>pérdida de entropía cruzada</b>.</p><p>La red le dio ${pct(L5.F0.p[D.y])} al ${D.y}. Si le hubiera dado 100 %, la pérdida sería 0; cuanto menos probabilidad le da a la respuesta correcta, más grande es la pérdida.</p>` },
+      { h: 'Retropropagación', dur: 3000, f: 'δ<sup>(3)</sup> = <var>p</var> − <var>y</var> &nbsp;&nbsp; ∂<var>L</var>/∂<var>w</var><sub><var>ji</var></sub> = δ<sub><var>j</var></sub> · <var>a</var><sub><var>i</var></sub>',
+        text: () => `<p>Ahora el error viaja hacia atrás, de la salida a la entrada. En la salida la señal es simplemente <var>p</var> − <var>y</var>: negativa en el dígito que debe subir y positiva en los que deben bajar.</p><p>Con la <b>regla de la cadena</b>, cada capa pasa esa señal a la anterior. Así se obtiene, para cada uno de los 13 002 parámetros, su <b>gradiente</b>: cuánto cambiaría el error si ese número cambiara un poco.</p>` },
+      { h: 'Descenso del gradiente', dur: 1900, f: '<var>w</var> ← <var>w</var> − η · ∂<var>L</var>/∂<var>w</var> &nbsp;&nbsp; (η = 0.1)',
+        text: () => `<p>Cada peso se mueve un poquito en contra de su gradiente, es decir, en la dirección que reduce el error. La <b>tasa de aprendizaje</b> η controla el tamaño del paso.</p><p>Tras un solo ajuste, la probabilidad del ${D.y} pasó de ${pct(L5.F0.p[D.y])} a <b>${pct(L5.F1.p[D.y])}</b>.</p><p class="tip">Ojo: esto mejora la respuesta para esta imagen. Para reconocer cualquier dígito hay que repetirlo con miles de ejemplos distintos.</p>` },
+      { h: 'Repetir miles de veces', auto: false,
+        text: () => `<p>Repetimos el ciclo con miles de imágenes, en grupos de ${BATCH} (<b>mini-lotes</b>). Una pasada completa por las ${grp(EPOCH)} imágenes es una <b>época</b>, y η se reduce un poco en cada una.</p><p>Observa: la pérdida baja, los aciertos suben y los pesos de la capa 1 pasan de ruido a patrones. Este entrenamiento ocurre <b>de verdad</b> en tu navegador.</p>`,
+        extras: trainExtras },
+    ],
+  },
+  {
+    title: 'Tu turno', draw: drawCh6, strip: false, legend: L_N,
+    beats: [
+      { h: 'Dibuja un dígito', auto: false,
+        text: () => `<p>Dibuja un número del 0 al 9 en el recuadro. Tu dibujo se reduce a 28 × 28 píxeles y se centra igual que en MNIST; luego la red hace la propagación hacia adelante en tiempo real.</p><p>Si falla, prueba con un trazo grande y centrado. Los dígitos de MNIST se escribieron en Estados Unidos, así que algunos estilos le resultan menos familiares.</p>`,
+        extras: () => {
+          const can = LIVE.seen >= EPOCH;
+          return `<div class="group"><button class="btn small" data-act="clear" type="button">Borrar</button><button class="btn small" data-act="sample6" type="button">Cargar un ejemplo de MNIST</button></div>
+          <div class="group"><span>Red:</span><button class="btn small" data-act="net-pre" aria-pressed="${S6.net === 'pre'}" type="button">Entrenada con MNIST</button><button class="btn small" data-act="net-live" aria-pressed="${S6.net === 'live' && can}" ${can ? '' : 'disabled title="Entrena al menos una época en el capítulo 5"'} type="button">La que entrenaste</button></div>`;
+        } },
+    ],
+  },
+];
+
+function trainExtras() {
+  const lbl = TR.done ? 'Terminado' : TR.running ? 'Pausar' : (LIVE.seen > 0 ? 'Continuar' : 'Entrenar');
+  return `<div class="group"><button class="btn small primary" data-act="train" type="button" ${TR.done ? 'disabled' : ''}>${lbl}</button><button class="btn small" data-act="reset" type="button">Reiniciar con pesos al azar</button></div>
+  <div class="group"><span>Velocidad:</span>${SPEEDS.map((s, i) => `<button class="btn small" data-act="speed" data-v="${i}" aria-pressed="${TR.speed === i}" type="button">${s.l}</button>`).join('')}</div>`;
+}
+
+/* ======================================================================
+   Navegación y panel
+   ====================================================================== */
+const ICON_PLAY = '<svg viewBox="0 0 16 16" fill="currentColor"><path d="M4 2.5v11l9-5.5z"/></svg>';
+const ICON_PAUSE = '<svg viewBox="0 0 16 16" fill="currentColor"><path d="M3.5 2.5h3v11h-3zM9.5 2.5h3v11h-3z"/></svg>';
+const val = v => (typeof v === 'function' ? v() : v);
+
+function go(ch, beat) {
+  const prevCh = S.ch;
+  S.ch = ch; S.beat = beat; S.t0 = performance.now();
+  S.seen.add(ch);
+  if (ch === 4) {
+    if (beat === 0 || !L5) makeL5();
+    if (beat === 4 && LIVE.seen === 0 && !TR.done) TR.running = true;
+  }
+  if (ch !== 4 || beat !== 4) TR.running = false;
+  if (ch === 5 && prevCh !== 5 && !S6.touched) { padFromSample(S.sample); S6.touched = true; }
+  stage.style.touchAction = ch === 5 ? 'none' : 'auto';
+  renderPanel();
+}
+function next() { const n = CH[S.ch].beats.length; if (S.beat < n - 1) go(S.ch, S.beat + 1); else if (S.ch < CH.length - 1) go(S.ch + 1, 0); else setPlaying(false); }
+function prev() { if (S.beat > 0) go(S.ch, S.beat - 1); else if (S.ch > 0) go(S.ch - 1, CH[S.ch - 1].beats.length - 1); }
+function setPlaying(v) { S.playing = v; $('#playBtn').innerHTML = v ? ICON_PAUSE + 'Pausa' : ICON_PLAY + 'Reproducir'; }
+
+function renderExtras() { const b = CH[S.ch].beats[S.beat]; $('#extras').innerHTML = b.extras ? b.extras() : ''; }
+function renderPanel() {
+  const ch = CH[S.ch], b = ch.beats[S.beat];
+  $('#eyebrow').textContent = `Capítulo ${S.ch + 1} de ${CH.length} · ${ch.title}`;
+  $('#beatTitle').textContent = val(b.h);
+  $('#beatText').innerHTML = val(b.text);
+  const f = $('#formula');
+  if (b.f) { f.innerHTML = val(b.f); f.hidden = false; } else f.hidden = true;
+  renderExtras();
+  $('#legend').innerHTML = ch.legend.map(([c, l]) => `<span style="--c:${c}">${l}</span>`).join('');
+  $('#dots').innerHTML = ch.beats.map((_, i) => `<i class="${i === S.beat ? 'on' : i < S.beat ? 'done' : ''}"></i>`).join('');
+  document.querySelectorAll('#chapters button').forEach((el, i) => {
+    if (i === S.ch) el.setAttribute('aria-current', 'step'); else el.removeAttribute('aria-current');
+    el.classList.toggle('seen', S.seen.has(i) && i !== S.ch);
+  });
+  $('#samples').style.visibility = ch.strip ? 'visible' : 'hidden';
+  $('#prevBtn').disabled = S.ch === 0 && S.beat === 0;
+  $('#nextBtn').disabled = S.ch === CH.length - 1 && S.beat === ch.beats.length - 1;
+  S.readMs = Math.max(3500, $('#beatText').textContent.length * 48);
+}
+
+function buildNav() {
+  $('#chapters').innerHTML = CH.map((c, i) => `<button type="button" data-ch="${i}"><span class="n">${i + 1}</span><span class="lbl">${c.title}</span></button>`).join('');
+  $('#chapters').addEventListener('click', e => { const b = e.target.closest('button'); if (b) go(+b.dataset.ch, 0); });
+}
+function paintThumb(c, k) {
+  const g = c.getContext('2d'), img = g.createImageData(28, 28), X = DATA.test.X;
+  for (let i = 0; i < 784; i++) { const v = X[k * 784 + i] * 255; img.data[i * 4] = img.data[i * 4 + 1] = img.data[i * 4 + 2] = v; img.data[i * 4 + 3] = 255; }
+  g.putImageData(img, 0, 0);
+}
+function buildSamples() {
+  const el = $('#samples');
+  el.innerHTML = '<span class="lbl">Dígito de entrada</span>';
+  PICKS.forEach((k, d) => {
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'thumb'; b.dataset.k = k; b.setAttribute('aria-label', `Usar un ${d}`); b.setAttribute('aria-pressed', 'false');
+    const c = document.createElement('canvas'); c.width = c.height = 28; paintThumb(c, k); b.append(c); el.append(b);
+  });
+  el.insertAdjacentHTML('beforeend', '<button class="btn small" type="button" data-act="random">Aleatorio</button><button class="btn small" type="button" data-act="error">Un error de la red</button>');
+  el.addEventListener('click', e => {
+    const t = e.target.closest('.thumb'); if (t) setSample(+t.dataset.k);
+  });
+}
+let errI = 0;
+const ACTIONS = {
+  random: () => setSample(Math.floor(Math.random() * 1000)),
+  randomOk: () => { let k; do k = Math.floor(Math.random() * 1000); while (PRED[k] !== DATA.test.Y[k]); setSample(k); },
+  error: () => { setSample(ERRS[errI++ % ERRS.length]); if (S.ch === 3 && S.beat !== 2) go(3, 2); },
+  train: () => { if (!TR.done) TR.running = !TR.running; renderExtras(); },
+  reset: () => { makeL5(); renderExtras(); renderPanel(); },
+  speed: el => { TR.speed = +el.dataset.v; renderExtras(); },
+  clear: () => { S6.fromSample = false; clearPad(); },
+  sample6: () => padFromSample(Math.floor(Math.random() * 1000)),
+  'net-pre': () => { S6.net = 'pre'; S6.dirty = true; renderExtras(); },
+  'net-live': () => { S6.net = 'live'; S6.dirty = true; renderExtras(); },
+};
+document.addEventListener('click', e => { const b = e.target.closest('[data-act]'); if (b && ACTIONS[b.dataset.act]) ACTIONS[b.dataset.act](b); });
+
+/* ======================================================================
+   Escenario, puntero y bucle de animación
+   ====================================================================== */
+const stage = $('#stage'), g = stage.getContext('2d'), wrap = $('#stageWrap');
+let SC = 1, DPR = 1;
+function resize() {
+  const r = wrap.getBoundingClientRect();
+  const sc = Math.min(r.width / VW, r.height / VH) || 0.5;
+  const w = Math.floor(VW * sc), h = Math.floor(VH * sc);
+  stage.style.width = w + 'px'; stage.style.height = h + 'px';
+  DPR = Math.min(2, window.devicePixelRatio || 1);
+  stage.width = Math.max(1, Math.round(w * DPR)); stage.height = Math.max(1, Math.round(h * DPR));
+  SC = sc;
+}
+new ResizeObserver(resize).observe(wrap);
+resize();
+
+const toV = e => { const r = stage.getBoundingClientRect(); return { x: ((e.clientX - r.left) / r.width) * VW, y: ((e.clientY - r.top) / r.height) * VH }; };
+const inPad = p => p.x >= PAD.x && p.x < PAD.x + PAD.s && p.y >= PAD.y && p.y < PAD.y + PAD.s;
+const padPt = p => ({ x: ((p.x - PAD.x) / PAD.s) * 280, y: ((p.y - PAD.y) / PAD.s) * 280 });
+let drawing = false, lastPt = null;
+stage.addEventListener('pointerdown', e => {
+  const p = toV(e);
+  if (S.ch === 5 && inPad(p)) {
+    if (S6.fromSample) { S6.fromSample = false; clearPad(); }
+    drawing = true; lastPt = padPt(p); padStroke(lastPt, lastPt);
+    stage.setPointerCapture(e.pointerId); e.preventDefault();
+  }
+});
+stage.addEventListener('pointermove', e => {
+  const p = toV(e); S.mouse.x = p.x; S.mouse.y = p.y; S.mouse.in = e.pointerType === 'mouse' || drawing;
+  if (drawing) { const q = padPt(p); padStroke(lastPt, q); lastPt = q; }
+});
+const endDraw = () => { drawing = false; };
+stage.addEventListener('pointerup', endDraw);
+stage.addEventListener('pointercancel', endDraw);
+stage.addEventListener('pointerleave', () => { S.mouse.in = false; });
+
+document.addEventListener('keydown', e => {
+  if (e.target.closest('input, select, textarea') || e.altKey || e.ctrlKey || e.metaKey) return;
+  if (e.key === 'ArrowRight' || e.key === 'PageDown') { next(); e.preventDefault(); }
+  else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { prev(); e.preventDefault(); }
+  else if (e.key === ' ' && !e.target.closest('button')) { setPlaying(!S.playing); e.preventDefault(); }
+  else if (/^[1-6]$/.test(e.key)) go(+e.key - 1, 0);
+});
+$('#nextBtn').addEventListener('click', next);
+$('#prevBtn').addEventListener('click', prev);
+$('#playBtn').addEventListener('click', () => setPlaying(!S.playing));
+$('#fsBtn').addEventListener('click', () => {
+  try {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else { const p = document.documentElement.requestFullscreen?.(); if (p) p.catch(() => {}); }
+  } catch (err) { /* el marco puede no permitirlo */ }
+});
+
+let lastNow = 0;
+function loop(now) {
+  requestAnimationFrame(loop);
+  drawFrame(now);
+}
+function drawFrame(now) {
+  S.frameNo++;
+  const dt = lastNow ? now - lastNow : 16; lastNow = now;
+  const t = now - S.t0, b = CH[S.ch].beats[S.beat];
+  if (S.playing && b.auto !== false && t > (b.dur || 1000) + S.readMs) next();
+  if (S.ch === 4 && S.beat === 4) trainTick(dt);
+  g.setTransform(DPR * SC, 0, 0, DPR * SC, 0, 0);
+  g.fillStyle = rgba(RGB.stage); g.fillRect(0, 0, VW, VH);
+  HOV.length = 0;
+  CH[S.ch].draw(g, S.beat, t);
+  drawHover(g);
+}
+
+async function boot() {
+  NET = MLP.fromModel(MODEL);
+  for (let k = 0; k < 16; k++) { let m = 1e-6; for (let i = 0; i < 784; i++) m = Math.max(m, Math.abs(NET.W[0][k * 784 + i])); WMAX.push(m); }
+  const [XT, XR] = await Promise.all([loadSprite(TEST_SPRITE, 1000), loadSprite(TRAIN_SPRITE, 6000)]);
+  DATA = {
+    test: { X: XT, Y: Uint8Array.from(MODEL.testLabels, c => +c), n: 1000 },
+    train: { X: XR, Y: Uint8Array.from(MODEL.trainLabels, c => +c), n: 6000 },
+  };
+  const act = [new Array(16).fill(0), new Array(16).fill(0)];
+  for (let k = 0; k < 1000; k++) {
+    const F = NET.forward(XT.subarray(k * 784, k * 784 + 784)); PRED.push(F.pred); CONF.push(F.p[F.pred]);
+    if (F.pred !== DATA.test.Y[k]) ERRS.push(k);
+    for (let l = 0; l < 2; l++) F.a[l + 1].forEach((v, i) => { if (v > 0) act[l][i]++; });
+  }
+  act.forEach((c, l) => c.forEach((n, i) => { if (n === 0) DEAD[l].add(i); }));
+  for (let d = 0; d < 10; d++) { let best = -1; for (let k = 0; k < 1000; k++) if (DATA.test.Y[k] === d && PRED[k] === d && CONF[k] > 0.97) { best = k; break; } PICKS.push(best >= 0 ? best : DATA.test.Y.indexOf(d)); }
+  LIVE = new MLP(ARCH); LIVE.randomize(SEED);
+  TRAINER = new Trainer(LIVE, DATA.train.X, DATA.train.Y, 6000, 99);
+  buildNav(); buildSamples();
+  setSample(PICKS[3], false);
+  setPlaying(false);
+  const m = /^#capitulo([1-6])$/.exec(location.hash);
+  go(m ? +m[1] - 1 : 0, 0);
+  $('#loading').hidden = true;
+  window.__mnist = { NET, DATA, analyze, render: () => { const t = performance.now(); drawFrame(t); return performance.now() - t; } };  // para inspección desde la consola
+  requestAnimationFrame(loop);
+}
+boot().catch(err => { $('#loading').textContent = 'No se pudieron cargar los datos: ' + err.message; });
+})();
+</script>
